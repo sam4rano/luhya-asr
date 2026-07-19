@@ -1,0 +1,45 @@
+# Luhya ASR -- Colab-optimised: XLS-R (300M) on 5h of Luhya speech
+# run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya_colab.yaml
+
+project: "Luhya-ASR"
+output_dir: "inprogress/Luhya-ASR"
+seed: 42
+report_to: "none"
+
+# Model -- XLS-R 300M, fast enough for Colab T4, good WER on low-resource
+pretrained_model: "xlsr-128"           # -> facebook/wav2vec2-xls-r-300m
+freeze_feature_encoder: true
+add_final_layer_adapter: true
+
+# Training
+batch_size: 8
+gradient_accumulation_steps: 2          # effective batch = 16
+num_epochs: 2
+max_steps: -1                           # train full 2 epochs
+learning_rate: 0.00001                  # 1e-5
+warmup_steps: 200
+fp16: true                              # T4 supports fp16
+bf16: false
+gradient_checkpointing: true
+save_steps: 500
+eval_steps: 500
+logging_steps: 10
+save_total_limit: 1
+ctc_zero_infinity: true
+
+# Data
+use_custom_dataset: false
+dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+train_split: "train"
+eval_split: "validation"
+language: "all"
+
+max_data_hours: 20.0
+sample: false
+sample_size: 1000
+
+# Text preprocessing
+add_language_tokens: false
+apply_accent_replacements: false
+
+character_set: " !'*,-.0123456789;:?abcdefghijklmnopqrstuvwxyz"

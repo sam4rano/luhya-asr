@@ -241,6 +241,24 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
             train_dataset, config.max_data_hours, config.seed
         )
 
+    # filter out corrupt/empty audio that torchcodec can't decode
+    def _is_valid_audio(x):
+        try:
+            arr = x["audio"]["array"]
+            return arr is not None and len(arr) > 0
+        except Exception:
+            return False
+
+    n_before = len(train_dataset)
+    train_dataset = train_dataset.filter(_is_valid_audio, num_proc=4,
+                                         desc="Removing corrupt audio from train split")
+    logging.info(f"Removed {n_before - len(train_dataset)} corrupt audio samples from train split")
+
+    n_before = len(dev_dataset)
+    dev_dataset = dev_dataset.filter(_is_valid_audio, num_proc=4,
+                                     desc="Removing corrupt audio from validation split")
+    logging.info(f"Removed {n_before - len(dev_dataset)} corrupt audio samples from dev split")
+
 
     # if there is a column called "audio_filepath" rename it to "audio"
     if "audio_filepath" in train_dataset.column_names:

@@ -36,7 +36,6 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
     
     return TrainingArguments(
         output_dir=output_dir,
-        group_by_length=True, # important for efficient training
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size,
         #eval_accumulation_steps=1024,
@@ -63,7 +62,7 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         learning_rate=config.learning_rate,
         save_total_limit=config.save_total_limit,
         push_to_hub=False,
-        report_to="wandb",
+        report_to=config.report_to,
         load_best_model_at_end=True,
         metric_for_best_model="score",
         greater_is_better=True, # this is only True when score is defined as (1 - error_rate) * 100, for CER and WER this should be False

@@ -76,7 +76,20 @@ class ASRDatasetEncoder(DatasetEncoder):
         return sample
     
     def batch_encode(self, batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-        audio_arrays = [audio["array"] for audio in batch["audio"]]
+        audio_arrays = []
+        valid_indices = []
+        for i, audio in enumerate(batch["audio"]):
+            try:
+                audio_arrays.append(audio["array"])
+                valid_indices.append(i)
+            except Exception:
+                pass
+
+        if not audio_arrays:
+            return {key: [] for key in batch if key != "audio"}
+
+        for key in batch:
+            batch[key] = [batch[key][i] for i in valid_indices]
 
         # IMPORTANT: this assumes that all audio samples 
         # have the same sampling rate. Make sure to check this

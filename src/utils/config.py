@@ -12,6 +12,7 @@ class ASRConfig:
     project: str
     output_dir: str
     seed: int
+    report_to: str = "wandb"  # "wandb", "none", "tensorboard", etc.
     
     # Model settings
     pretrained_model: str

@@ -6,6 +6,7 @@
 project: "Luhya-ASR"
 output_dir: "inprogress/Luhya-ASR"
 seed: 42
+report_to: "wandb"
 
 # Model -- Wav2Vec2-BERT 2.0 (580M params), best for low-resource ASR
 # the codebase auto-selects SeamlessM4TFeatureExtractor + Wav2Vec2BertProcessor for this model

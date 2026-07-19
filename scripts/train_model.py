@@ -184,15 +184,13 @@ def main():
     # build vocabulary from  user provided character set
     logging.info("Building vocabulary...")
     
-    try:
+    if 'language' in train_dataset.column_names:
         language_tags = set(train_dataset['language'])
-    except KeyError: 
-        # in case no language column is found in the training dataset
+        logging.info(f"Language tags: {language_tags}")
+    else:
         logging.warning("Language tags not found in the training dataset. "
                         "Multilingual training with language tags will not be used.")
         language_tags = None
-    
-    else:
         logging.info(f"Language tags: {language_tags}")
 
     vocab_dict = build_vocabulary(
