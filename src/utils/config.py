@@ -12,11 +12,11 @@ class ASRConfig:
     project: str
     output_dir: str
     seed: int
-    report_to: str = "wandb"  # "wandb", "none", "tensorboard", etc.
     
     # Model settings
     pretrained_model: str
     freeze_feature_encoder: bool = True
+    report_to: str = "wandb"  # "wandb", "none", "tensorboard", etc.
     
     # Training settings
     batch_size: int = 4
