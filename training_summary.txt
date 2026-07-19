@@ -1,0 +1,13 @@
+Luhya ASR Training Summary
+==========================
+Model: Sam4rano/luhya-asr-w2v-BERT
+Date: 2026-07-19
+
+Final Performance:
+- Word Error Rate (WER): 43.45%
+- Character Error Rate (CER): 11.36%
+- Final Eval Loss: 0.4551
+
+Environment Details:
+- Framework: Transformers 5.13.1
+- Hardware: Google Colab GPU
