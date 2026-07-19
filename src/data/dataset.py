@@ -429,11 +429,11 @@ def create_processor(
     )
     
     # initialize feature extractor
-    if config.pretrained_model == "facebook/w2v-bert-2.0":
+    pretrained_model_path = config.get_pretrained_model_path()
+    if "w2v-bert" in pretrained_model_path.lower():
         feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(
-            "facebook/w2v-bert-2.0"
+            pretrained_model_path
         )
-        # combine into processor
         processor = Wav2Vec2BertProcessor(
             feature_extractor=feature_extractor, 
             tokenizer=tokenizer
