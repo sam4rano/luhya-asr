@@ -1,0 +1,13 @@
+{
+  "feature_extractor": {
+    "feature_extractor_type": "SeamlessM4TFeatureExtractor",
+    "feature_size": 80,
+    "num_mel_bins": 80,
+    "padding_side": "right",
+    "padding_value": 1,
+    "return_attention_mask": true,
+    "sampling_rate": 16000,
+    "stride": 2
+  },
+  "processor_class": "Wav2Vec2BertProcessor"
+}
