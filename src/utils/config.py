@@ -53,6 +53,7 @@ class ASRConfig:
     dataset_path: Optional[str] = None
     sample: bool = False
     sample_size: int = 1000
+    max_data_hours: float = 0.0  # 0 means no limit; >0 restricts training data to this many hours
     #chars_to_remove_regex: str = r'[\,\?\.\!\-\;\:\"\"\%\"\�\']'
 
     # model vocab settings
@@ -66,7 +67,8 @@ class ASRConfig:
         "xlsr-53": "facebook/wav2vec2-large-xlsr-53",
         "mHuBERT-147": "utter-project/mHuBERT-147",
         "w2v-BERT": "facebook/w2v-bert-2.0",
-        "mms-300m": "facebook/mms-300m"
+        "mms-300m": "facebook/mms-300m",
+        "mms-1b": "facebook/mms-1b-all"
     })
     
 

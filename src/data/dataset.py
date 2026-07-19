@@ -80,6 +80,50 @@ def _ensure_transcription_column(dataset: Dataset, split_name: str) -> Dataset:
     )
 
 
+def _filter_by_max_hours(dataset: Dataset, max_hours: float, seed: int = 42) -> Dataset:
+    """Randomly sample a dataset to stay under a maximum number of hours.
+    
+    Shuffles the dataset and selects samples in order until the cumulative
+    audio duration reaches or just exceeds `max_hours`.
+    
+    Args:
+        dataset: Dataset with an 'audio_duration' column
+        max_hours: Maximum hours of audio to keep
+        seed: Random seed for reproducibility
+        
+    Returns:
+        Filtered dataset with at most `max_hours` of audio
+    """
+    total_secs = sum(float(d) for d in dataset["audio_duration"])
+    total_hours = total_secs / 3600
+    logging.info(
+        f"Total dataset duration: {total_hours:.2f} hours. "
+        f"Filtering to at most {max_hours:.2f} hours..."
+    )
+    
+    if total_hours <= max_hours:
+        logging.info("Dataset already under the limit; no filtering applied.")
+        return dataset
+    
+    dataset = dataset.shuffle(seed=seed)
+    
+    cumulative = 0.0
+    keep_indices = []
+    for i, duration in enumerate(dataset["audio_duration"]):
+        cumulative += float(duration)
+        keep_indices.append(i)
+        if cumulative / 3600 >= max_hours:
+            break
+    
+    filtered = dataset.select(keep_indices)
+    filtered_hours = sum(float(d) for d in filtered["audio_duration"]) / 3600
+    logging.info(
+        f"After filtering: {len(filtered)} samples, "
+        f"{filtered_hours:.2f} hours kept."
+    )
+    return filtered
+
+
 def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
     """Load and prepare datasets for training and evaluation.
     
@@ -172,6 +216,7 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
     elif "audio_duration" in dev_dataset.column_names:
         pass
     else:
+
         # create audio_duration column
         audio_duration_list = []
 
@@ -188,6 +233,12 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
         logging.info(f"Creating audio_duration column in validation dataset...")
         dev_dataset = dev_dataset.add_column(
             "audio_duration", audio_duration_list
+        )
+
+    # restrict training data to a maximum number of hours (e.g. 20h for low-resource)
+    if hasattr(config, 'max_data_hours') and config.max_data_hours > 0:
+        train_dataset = _filter_by_max_hours(
+            train_dataset, config.max_data_hours, config.seed
         )
 
 

@@ -1,138 +1,54 @@
+# Luhya ASR -- Fine-tune Wav2Vec2-BERT on Luhya speech
 
-# Ethio ASR
+Fine-tunes [facebook/w2v-bert-2.0](https://huggingface.co/facebook/w2v-bert-2.0) (Wav2Vec2-BERT 2.0, 580M params) on ~20 hours of the [Luhya ASR dataset](https://huggingface.co/datasets/DDD-Kenya/Luhya-ASR-Data-subset-50h). Follows the official [HuggingFace fine-tuning guide](https://huggingface.co/blog/fine-tune-w2v2-bert).
 
-To run the code, follow the instructions below 
+## Quickstart
 
-### 1. Clone the repo
-```shell
-clone https://github.com/badrex/Ethio-ASR.git
+### Local / server with GPU
+
+```bash
+pip install transformers datasets evaluate wandb jiwer librosa accelerate soundfile
+python3 scripts/train_model.py --config config_files/ASR_train_config_luhya.yaml
 ```
 
-### 2. Set up environment variables in .env
+### Google Colab / Lightning AI
 
-Then create an empty  `.env` file in the project root:
+Click the badge below or copy-paste into a notebook:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sam4rano/luhya-asr/blob/main/notebooks/train_luhya_asr.ipynb)
+
+**Or in a notebook cell:**
+
+```python
+!git clone https://github.com/sam4rano/luhya-asr.git
+%cd luhya-asr
+!pip install transformers datasets evaluate wandb jiwer librosa accelerate soundfile
+!python3 scripts/train_model.py --config config_files/ASR_train_config_luhya.yaml
+```
+
+## Dataset
+
+[DDD-Kenya/Luhya-ASR-Data-subset-50h](https://huggingface.co/datasets/DDD-Kenya/Luhya-ASR-Data-subset-50h) -- ~50 hours of Luhya speech (multiple dialects: Wanga, Kabarasi, Kisa, Banyala, Bukusu, etc.). Training restricted to 20 hours via `max_data_hours: 20.0` in the config.
+
+## Configuration
+
+Edit `config_files/ASR_train_config_luhya.yaml` to adjust:
+
+| Setting | Default | Notes |
+|---|---|---|
+| `pretrained_model` | `facebook/w2v-bert-2.0` | 580M params; also try `facebook/mms-300m` |
+| `max_data_hours` | `20.0` | Set to `0` to use all 50h |
+| `batch_size` | `4` | Lower to `1` on T4 if OOM |
+| `learning_rate` | `5e-5` | Use `5e-4` for MMS models |
+| `add_final_layer_adapter` | `true` | Parameter-efficient; only adapter + CTC head trained |
+
+## Environment variables
+
+Create a `.env` file in the project root (optional):
+
 ```env
-# Weights & Biases API key
-WANDB_API_KEY="wandb_api_key_xxx"
-
-# Hugging Face API key
-HF_API_KEY="hf_api_key_xxx"
-
-# Set cache
-NUMBA_CACHE_DIR='/tmp/numba_cache'
-LIBROSA_CACHE_DIR="/tmp/librosa_cache"
-
-# Hugging Face cache directory
-HF_HOME='/project_dir/huggingface_cache'
-
-# MPLCONFIGDIR
-MPLCONFIGDIR='/tmp/matplotlib_cache'
+WANDB_API_KEY="your_wandb_key"
+HF_API_KEY="your_hub_key"
 ```
 
-
-### 3. Set the YAML config file to run the experiment 
-This config is under config_files. This config below is for an experiment on a small scale dataset.
-
-```yaml
-# Project settings
-# this is the WANDB project name
-project: "Ethio-ASR"
-
-# this is the output directory for  saving the model and processor 
-output_dir: "inprogress/Ethio-ASR"
-
-# set random seed for reproducibility
-seed: 42
-
-# Model settings
-pretrained_model:   "facebook/w2v-bert-2.0" # or "acebook/mms-300m  
-freeze_feature_encoder: true
-add_final_layer_adapter: true # should be false for facebook/mms-300m
-
-# Training settings
-batch_size: 8
-gradient_accumulation_steps: 4
-num_epochs: 25
-max_steps: 18400
-learning_rate: 0.00003 # or 0.0005 for "facebook/mms-300m"  
-warmup_ratio: 0.1
-fp16: true
-gradient_checkpointing: true
-save_steps: 800
-eval_steps: 800
-logging_steps: 5
-save_total_limit: 2
-
-# Data settings
-# if use_custom_dataset is true, then dataset_path is the path to the custom dataset on disk
-# if use_custom_dataset is false, then dataset_path is the dataset repo name on the HF hub
-use_custom_dataset: false
-# if from HF hub, use the repo name for example "badrex/waxalNLP-ethiopic-final" 
-dataset_path: "badrex/waxalNLP-ethiopic-final"   
-train_split: "train"
-eval_split: "validation"
-language: "all"
-
-# Data sampling settings (for debugging purposes)
-sample: true
-sample_size: 197634 # this is the size of the dataset in the HF hub
-
-
-## Text preprocessing settings
-# Character set allowed in transcriptions - customize based on language and script
-add_language_tokens: true
-apply_accent_replacements: true
-character_set: " !#$%&'*+,-.0123456789=?@abcdefghijklmnopqrstuvwxyzሀሁሂሃሄህሆሇለሉሊላሌልሎሏሐሑሒሓሔሕሖሗመሙሚማሜምሞሟሠሡሢሣሤሥሦሧረሩሪራሬርሮሯሰሱሲሳሴስሶሷሸሹሺሻሼሽሾሿቀቁቂቃቄቅቆቇቈቊቋቌቍቐቑቒቓቔቕቖቘቚቛቜቝበቡቢባቤብቦቧቨቩቪቫቬቭቮቯተቱቲታቴትቶቷቸቹቺቻቼችቾቿኀኁኂኃኄኅኆኇኈኊኋኌኍነኑኒናኔንኖኗኘኙኚኛኜኝኞኟአኡኢኣኤእኦኧከኩኪካኬክኮኯኰኲኳኴኵኸኹኺኻኼኽኾዀዂዃዄዅወዉዊዋዌውዎዏዐዑዒዓዔዕዖዘዙዚዛዜዝዞዟዠዡዢዣዤዥዦዧየዩዪያዬይዮዯደዱዲዳዴድዶዷዸዹዺዻዼዽዾዿጀጁጂጃጄጅጆጇገጉጊጋጌግጎጏጐጒጓጔጕጘጙጚጛጜጝጞጟጠጡጢጣጤጥጦጧጨጩጪጫጬጭጮጯጰጱጲጳጴጵጶጷጸጹጺጻጼጽጾጿፀፁፂፃፄፅፆፇፈፉፊፋፌፍፎፏፐፑፒፓፔፕፖፗፘፙፚ፠፡።፣፤፥፦፧፨፩፪፫፬፭፮፯፰፱፲፳፴፵፶፷፸፹፺፻፼€"
-```
-
-
-
-### 4. Set bash script
-This is the main script for running the experiment. The most important is to setup the correct path to the Hugging Face directory. 
-
-The script below run a debugging experiment on a small scale dataset.
-
-```shell
-##!/usr/bin/env bash
-
-# run misc. stuff
-nvidia-smi
-echo $CUDA_VISIBLE_DEVICES
-
-# cahce dirs 
-export HF_HOME="/project_dir/huggingface_cache"
-NUMBA_CACHE_DIR='/tmp/numba_cache'
-LIBROSA_CACHE_DIR="/tmp/librosa_cache"
-
-# show current working directory
-echo "Current working directory: $(pwd)"
-
-# run training script
-python3 Ethio-ASR/scripts/train_model.py --config Ethio-ASR/config_files/ASR_train_config_multi_debug.yaml
-```
-
-
-### 5. Submit the run.sub file
-
-
-```shell
-universe              = docker
-docker_image          = badrnlp/hf-gpu-asr:0.2
-
-transfer_executable = False
-
-initialdir            = /project_dir/
-executable            = /project_dir/Ethio-ASR/bash_scripts/run_train_ethio_asr.sh
-
-output                = logs/run.sh.$(ClusterId).$(Month)_$(Day)_$(SUBMIT_TIME).out
-error                 = logs/run.sh.$(ClusterId).$(Month)_$(Day)_$(SUBMIT_TIME).err
-log                   = logs/run.sh.$(ClusterId).$(Month)_$(Day)_$(SUBMIT_TIME).log
-
-request_CPUs          = 12
-request_memory        = 50G
-request_GPUs          = 1
-
-# Limit to the failing node for testing
-requirements          = (TARGET.UidDomain == "lsv.uni-saarland.de") && (machine == "cl18lx.lsv.uni-saarland.de")
-queue 1
-```
+Training runs without these but won't log to W&B or push to HF Hub.

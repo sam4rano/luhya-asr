@@ -1,0 +1,49 @@
+# Luhya ASR -- fine-tune Wav2Vec2-BERT on 20h of Luhya speech
+# follows the official HF blog: https://huggingface.co/blog/fine-tune-w2v2-bert
+#
+# run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya.yaml
+
+project: "Luhya-ASR"
+output_dir: "inprogress/Luhya-ASR"
+seed: 42
+
+# Model -- Wav2Vec2-BERT 2.0 (580M params), best for low-resource ASR
+# the codebase auto-selects SeamlessM4TFeatureExtractor + Wav2Vec2BertProcessor for this model
+pretrained_model: "facebook/w2v-bert-2.0"
+freeze_feature_encoder: true
+add_final_layer_adapter: true
+
+# Training -- matches the HF blog recommended settings
+batch_size: 4                 # lower if GPU OOM; effective batch = 4 * 8 = 32
+gradient_accumulation_steps: 8
+num_epochs: 25
+max_steps: 18400              # stop early if needed; -1 to train full epochs
+learning_rate: 0.00005        # 5e-5, as recommended
+warmup_ratio: 0.1             # 10 % warmup (blog uses 500 steps explicitly)
+fp16: false
+bf16: true                    # bf16 preferred over fp16 for training stability
+gradient_checkpointing: true
+save_steps: 800
+eval_steps: 800
+logging_steps: 5
+save_total_limit: 2
+
+# Data -- Luhya ASR subset from HuggingFace Hub
+use_custom_dataset: false
+dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+train_split: "train"
+eval_split: "validation"
+language: "all"               # no language-column filtering (single-language dataset)
+
+# Restrict to ~20 hours (random shuffle, then take first N samples up to the limit)
+max_data_hours: 20.0
+
+sample: false
+sample_size: 1000
+
+# Text preprocessing
+add_language_tokens: false
+apply_accent_replacements: false
+
+# Latin character set for Luhya (lowercase a-z, digits, basic punctuation)
+character_set: " !'*,-.0123456789;:?abcdefghijklmnopqrstuvwxyz"
