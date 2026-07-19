@@ -1,4 +1,4 @@
-# Luhya ASR -- Colab-optimised: XLS-R (300M) on 5h of Luhya speech
+# Luhya ASR -- Colab: w2v-bert-2.0 following HF blog recommendations
 # run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya_colab.yaml
 
 project: "Luhya-ASR"
@@ -6,19 +6,19 @@ output_dir: "/content/drive/MyDrive/luhya-asr-output"
 seed: 42
 report_to: "none"
 
-# Model -- XLS-R 300M, fast enough for Colab T4, good WER on low-resource
-pretrained_model: "xlsr-128"           # -> facebook/wav2vec2-xls-r-300m
+# Model -- Wav2Vec2-BERT 2.0 (580M), best for low-resource ASR per HF blog
+pretrained_model: "w2v-BERT"           # -> facebook/w2v-bert-2.0
 freeze_feature_encoder: true
-add_final_layer_adapter: false
+add_final_layer_adapter: true          # REQUIRED for w2v-bert-2.0 (prevents loss explosion)
 
-# Training
-batch_size: 8
-gradient_accumulation_steps: 2          # effective batch = 16
-num_epochs: 2
-max_steps: -1                           # train full 2 epochs
-learning_rate: 0.00005                  # 5e-5 (standard for XLS-R fine-tuning)
-warmup_steps: 200
-fp16: true                              # T4 supports fp16
+# Training -- matches HF blog: https://huggingface.co/blog/fine-tune-w2v2-bert
+batch_size: 4                           # lower for T4; effective batch = 4 * 8 = 32 (matches blog)
+gradient_accumulation_steps: 8
+num_epochs: 2                           # increase to 5-10 for better results
+max_steps: -1
+learning_rate: 0.00005                  # 5e-5, as recommended
+warmup_steps: 500                       # matches blog (5-15% of total steps)
+fp16: true                              # T4 sweet spot
 bf16: false
 gradient_checkpointing: true
 save_steps: 500
@@ -34,7 +34,7 @@ train_split: "train"
 eval_split: "validation"
 language: "all"
 
-max_data_hours: 20.0
+max_data_hours: 20.0                    # restart with 5h for faster iteration
 sample: false
 sample_size: 1000
 
