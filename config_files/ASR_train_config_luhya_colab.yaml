@@ -2,7 +2,7 @@
 # run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya_colab.yaml
 
 project: "Luhya-ASR"
-output_dir: "inprogress/Luhya-ASR"
+output_dir: "/content/drive/MyDrive/luhya-asr-output"
 seed: 42
 report_to: "none"
 
