@@ -11,13 +11,13 @@ pretrained_model: "w2v-BERT"           # -> facebook/w2v-bert-2.0
 freeze_feature_encoder: true
 add_final_layer_adapter: true          # REQUIRED for w2v-bert-2.0 (prevents loss explosion)
 
-# Training -- matches HF blog: https://huggingface.co/blog/fine-tune-w2v2-bert
-batch_size: 4                           # lower for T4; effective batch = 4 * 8 = 32 (matches blog)
+# Training
+batch_size: 4                           # lower for T4; effective batch = 4 * 8 = 32
 gradient_accumulation_steps: 8
-num_epochs: 2                           # increase to 5-10 for better results
+num_epochs: 5
 max_steps: -1
-learning_rate: 0.00005                  # 5e-5, as recommended
-warmup_steps: 500                       # matches blog (5-15% of total steps)
+learning_rate: 0.00005                  # 5e-5
+warmup_steps: 500
 fp16: true                              # T4 sweet spot
 bf16: false
 gradient_checkpointing: true
@@ -32,9 +32,15 @@ use_custom_dataset: false
 dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
 train_split: "train"
 eval_split: "validation"
-language: "all"
 
-max_data_hours: 20.0                    # restart with 5h for faster iteration
+# 40 hours, 80/20 split
+max_data_hours: 40.0
+validation_split_pct: 0.2
+
+# Memory safety on T4 Colab
+max_audio_length: 30.0
+num_proc: 2
+
 sample: false
 sample_size: 1000
 

@@ -55,7 +55,10 @@ class ASRConfig:
     sample: bool = False
     sample_size: int = 1000
     max_data_hours: float = 0.0  # 0 means no limit; >0 restricts training data to this many hours
-    #chars_to_remove_regex: str = r'[\,\?\.\!\-\;\:\"\"\%\"\�\']'
+    validation_split_pct: float = 0.0  # 0 = use pre-existing eval_split; >0 = split train data into train/val (e.g. 0.2 = 20% val)
+    eval_dialect: str = "all"  # dialect to filter eval set (e.g. "Wanga"); "all" = no filtering
+    max_audio_length: float = 30.0  # max individual sample duration in seconds (memory safety; 0 = no limit)
+    num_proc: int = 4  # number of CPU processes for dataset preprocessing (lower = less RAM)
 
     # model vocab settings
     add_language_tokens: bool = False

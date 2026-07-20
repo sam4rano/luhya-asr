@@ -43,15 +43,15 @@ class DatasetEncoder(ABC):
         batched: bool = True,
         batch_size: int = 32,
         remove_columns: bool = True,
+        num_proc: int = 4,
     ) -> Dataset:
         """Encode a dataset and prepare it for training."""
 
-        # self.batch_encode is implemented in the child classes
         return dataset.map(
             self.batch_encode,
             batched=batched,
             batch_size=batch_size,
-            num_proc=8,
+            num_proc=num_proc,
             remove_columns=dataset.column_names if remove_columns else None,
             desc="Encoding dataset using ASRDatasetEncoder"
         )

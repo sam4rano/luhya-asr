@@ -184,11 +184,17 @@ def main():
     # build vocabulary from  user provided character set
     logging.info("Building vocabulary...")
     
+    lang_col = None
     if 'language' in train_dataset.column_names:
-        language_tags = set(train_dataset['language'])
-        logging.info(f"Language tags: {language_tags}")
+        lang_col = 'language'
+    elif 'dialect' in train_dataset.column_names:
+        lang_col = 'dialect'
+
+    if lang_col:
+        language_tags = set(train_dataset[lang_col])
+        logging.info(f"Language tags ({lang_col}): {language_tags}")
     else:
-        logging.warning("Language tags not found in the training dataset. "
+        logging.warning("Language/dialect tags not found in the training dataset. "
                         "Multilingual training with language tags will not be used.")
         language_tags = None
         logging.info(f"Language tags: {language_tags}")
@@ -227,8 +233,9 @@ def main():
     # encode datasets for training with ASRDatasetEncoder
     logging.info("Preparing datasets for training with ASRDatasetEncoder...")
     asr_dataset_encoder = ASRDatasetEncoder(processor)
-    train_dataset = asr_dataset_encoder.encode_dataset(train_dataset)
-    eval_dataset = asr_dataset_encoder.encode_dataset(eval_dataset)
+    num_proc = getattr(config, 'num_proc', 4)
+    train_dataset = asr_dataset_encoder.encode_dataset(train_dataset, num_proc=num_proc)
+    eval_dataset = asr_dataset_encoder.encode_dataset(eval_dataset, num_proc=num_proc)
 
     # # encode datasets (with caching)
     # cache_dir = project_root / ".dataset_cache"

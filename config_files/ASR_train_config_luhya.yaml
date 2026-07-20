@@ -1,4 +1,4 @@
-# Luhya ASR -- fine-tune Wav2Vec2-BERT on 20h of Luhya speech
+# Luhya ASR -- fine-tune Wav2Vec2-BERT on 40h of Luhya speech
 # follows the official HF blog: https://huggingface.co/blog/fine-tune-w2v2-bert
 #
 # run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya.yaml
@@ -9,18 +9,17 @@ seed: 42
 report_to: "wandb"
 
 # Model -- Wav2Vec2-BERT 2.0 (580M params), best for low-resource ASR
-# the codebase auto-selects SeamlessM4TFeatureExtractor + Wav2Vec2BertProcessor for this model
 pretrained_model: "facebook/w2v-bert-2.0"
 freeze_feature_encoder: true
 add_final_layer_adapter: true
 
-# Training -- matches the HF blog recommended settings
-batch_size: 4                 # lower if GPU OOM; effective batch = 4 * 8 = 32
+# Training
+batch_size: 4                 # effective batch = 4 * 8 = 32
 gradient_accumulation_steps: 8
-num_epochs: 25
-max_steps: 18400              # stop early if needed; -1 to train full epochs
-learning_rate: 0.00005        # 5e-5, as recommended
-warmup_ratio: 0.1             # 10 % warmup (blog uses 500 steps explicitly)
+num_epochs: 8                 # train more epochs (was 25 with early stop at 2)
+max_steps: -1                 # -1 to use epochs instead of step-based training
+learning_rate: 0.00005        # 5e-5
+warmup_ratio: 0.1             # 10 % warmup
 fp16: false
 bf16: true                    # bf16 preferred over fp16 for training stability
 gradient_checkpointing: true
@@ -34,10 +33,14 @@ use_custom_dataset: false
 dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
 train_split: "train"
 eval_split: "validation"
-language: "all"               # no language-column filtering (single-language dataset)
 
-# Restrict to ~20 hours (random shuffle, then take first N samples up to the limit)
-max_data_hours: 20.0
+# Use 40 hours, split into 80% train / 20% validation
+max_data_hours: 40.0
+validation_split_pct: 0.2     # 20% of data for validation (overrides eval_split)
+
+# Memory safety -- prevent RAM ballooning at 40h
+max_audio_length: 30.0        # drop samples >30s (memory spikes from very long audio)
+num_proc: 4                   # CPU processes for dataset preprocessing (lower = less RAM)
 
 sample: false
 sample_size: 1000

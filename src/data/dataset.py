@@ -124,6 +124,30 @@ def _filter_by_max_hours(dataset: Dataset, max_hours: float, seed: int = 42) -> 
     return filtered
 
 
+def _get_dialect_column(dataset: Dataset) -> Optional[str]:
+    """Detect the dialect/language column name in the dataset."""
+    if "dialect" in dataset.column_names:
+        return "dialect"
+    if "language" in dataset.column_names:
+        return "language"
+    return None
+
+
+def _filter_by_dialect(dataset: Dataset, dialect: str, dialect_col: str,
+                       num_proc: int = 4) -> Dataset:
+    """Filter dataset to only include a specific dialect."""
+    logging.info(f"Filtering dataset for '{dialect}' dialect (column: '{dialect_col}')...")
+    n_before = len(dataset)
+    dataset = dataset.filter(
+        lambda x: str(x[dialect_col]).strip().lower() == dialect.strip().lower(),
+        batch_size=32,
+        num_proc=num_proc,
+        desc=f"Filtering by dialect '{dialect}'"
+    )
+    logging.info(f"Dialect filter: {n_before} -> {len(dataset)} samples kept")
+    return dataset
+
+
 def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
     """Load and prepare datasets for training and evaluation.
     
@@ -133,115 +157,105 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
     Returns:
         Tuple of (train_dataset, eval_dataset)
     """
-    # Load custom dataset if specified
+    num_proc = getattr(config, 'num_proc', 4)
+
     if hasattr(config, 'use_custom_dataset') and config.use_custom_dataset:
         if hasattr(config, 'dataset_path') and config.dataset_path:
             logging.info(f"Loading custom training dataset locally from "
                          f"{config.dataset_path}...")
-            
             dataset = DatasetDict.load_from_disk(config.dataset_path)
         else:
             raise ValueError(f"dataset_path to a local dataset must be specified "
                              f"when use_custom_dataset is True")
     else:
-        # Load dataset from HF hub
         logging.info(f"Loading dataset from HF hub from "
                      f"{config.dataset_path}...")
         dataset = load_dataset(
             config.dataset_path,
-            verification_mode="no_checks", 
+            verification_mode="no_checks",
         )
 
-    # cast audio column to Audio with 16000 Hz sampling rate
     logging.info(f"Casting audio column to Audio with 16000 Hz sampling rate...")
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
 
-    logging.info(f"Creating train and validation splits...")
-    # if language is not "all", filter dataset to only include language
-    if config.language != "all":
-        languages = dataset[config.train_split].unique("language")
-        if config.language not in languages:
-            raise ValueError(f"Language {config.language} not found in dataset")
-        
-        logging.info(f"Filtering dataset for {config.language.upper()} language...")
+    train_dataset = dataset[config.train_split]
 
-        # table = dataset[config.train_split].data.table
-        # mask = pc.equal(table.column("language"), config.language)
-        # filtered_table = table.filter(mask)
-        # train_dataset = Dataset(filtered_table)
+    dialect_col = _get_dialect_column(train_dataset)
+    if dialect_col:
+        dialects = sorted(set(str(d) for d in train_dataset[dialect_col]))
+        logging.info(f"Detected dialect column '{dialect_col}' with values: {dialects}")
+    else:
+        logging.info("No dialect/language column found in dataset")
 
-        train_dataset = dataset[config.train_split].filter(
-            lambda x: x["language"] == config.language,
-            batch_size=32,
-            desc="Filtering train split"
-        )
-
-        # table = dataset[config.eval_split].data.table
-        # mask = pc.equal(table.column("language"), config.language)
-        # filtered_table = table.filter(mask)
-        # dev_dataset = Dataset(filtered_table)
-
-        dev_dataset = dataset[config.eval_split].filter(
-            lambda x: x["language"] == config.language,
-            batch_size=32,
-            desc="Filtering validation split"
-        )
-    else: # all languages => multilingual model
-        train_dataset = dataset[config.train_split]
-        dev_dataset = dataset[config.eval_split]
+    if config.language != "all" and dialect_col:
+        train_dataset = _filter_by_dialect(train_dataset, config.language,
+                                           dialect_col, num_proc)
 
     train_dataset = _ensure_transcription_column(train_dataset, "train")
-    dev_dataset = _ensure_transcription_column(dev_dataset, "validation")
-
-    # if there is a column called "duration" rename it to "audio_duration"
     train_dataset = _ensure_audio_duration_column(train_dataset, "train")
-    dev_dataset = _ensure_audio_duration_column(dev_dataset, "validation")
 
-    # sample dataset if specified
+    validation_split_pct = getattr(config, 'validation_split_pct', 0.0)
+    if validation_split_pct > 0:
+        logging.info(f"Splitting train data: {1 - validation_split_pct:.0%} train, "
+                     f"{validation_split_pct:.0%} validation")
+        train_dataset = train_dataset.shuffle(seed=config.seed)
+        split_point = int(len(train_dataset) * (1 - validation_split_pct))
+        dev_dataset = train_dataset.select(range(split_point, len(train_dataset)))
+        train_dataset = train_dataset.select(range(split_point))
+        logging.info(f"Split: {len(train_dataset)} train samples, "
+                     f"{len(dev_dataset)} validation samples")
+    else:
+        logging.info(f"Using pre-existing eval split: '{config.eval_split}'")
+        dev_dataset = dataset[config.eval_split]
+        dev_dataset = _ensure_transcription_column(dev_dataset, "validation")
+        dev_dataset = _ensure_audio_duration_column(dev_dataset, "validation")
+
     if config.sample:
         logging.info(f"Sampling dataset to {config.sample_size} samples...")
-
-        # shuffle the train dataset
         train_dataset = train_dataset.shuffle(seed=config.seed)
         train_dataset = train_dataset.select(range(config.sample_size))
-
-        # shuffle the dev dataset
         dev_dataset = dev_dataset.shuffle(seed=config.seed)
-        # => sample 2000 sampels because valdiation set is large
-        dev_dataset = dev_dataset.select(range(2000))
+        dev_dataset = dev_dataset.select(range(min(2000, len(dev_dataset))))
 
-    # same for dev dataset
-    if "duration" in dev_dataset.column_names:
-        dev_dataset = dev_dataset.rename_column("duration", "audio_duration")
-    elif "audio_duration" in dev_dataset.column_names:
-        pass
-    else:
-
-        # create audio_duration column
-        audio_duration_list = []
-
-        for audio in tqdm(dev_dataset["audio"], 
-                               total=len(dev_dataset["audio"]), 
-                               desc="Calculating audio duration in validation dataset"):
-            
-            try:
-                audio_duration_list.append(len(audio["array"]) / audio["sampling_rate"])
-            except Exception as e:
-                logging.error(f"Error calculating audio duration for audio {audio}: {e}")
-                audio_duration_list.append(0.0)
-
-        logging.info(f"Creating audio_duration column in validation dataset...")
-        dev_dataset = dev_dataset.add_column(
-            "audio_duration", audio_duration_list
-        )
-
-    # restrict training data to a maximum number of hours (e.g. 20h for low-resource)
     if hasattr(config, 'max_data_hours') and config.max_data_hours > 0:
         train_dataset = _filter_by_max_hours(
             train_dataset, config.max_data_hours, config.seed
         )
 
-    # filter out corrupt/empty audio that torchcodec can't decode
+    eval_dialect = getattr(config, 'eval_dialect', 'all')
+    if eval_dialect != "all" and dialect_col:
+        dev_dataset = _filter_by_dialect(dev_dataset, eval_dialect,
+                                         dialect_col, num_proc)
+        if len(dev_dataset) == 0:
+            logging.warning(
+                f"No samples found for eval dialect '{eval_dialect}'. "
+                f"Falling back to unfiltered eval set."
+            )
+            dev_dataset = dataset[config.eval_split if validation_split_pct == 0
+                                  else config.train_split]
+            if validation_split_pct == 0:
+                dev_dataset = _ensure_transcription_column(dev_dataset, "validation")
+                dev_dataset = _ensure_audio_duration_column(dev_dataset, "validation")
+
+    max_audio_length = getattr(config, 'max_audio_length', 0.0)
+    if max_audio_length > 0:
+        logging.info(f"Removing samples longer than {max_audio_length}s (memory safety)...")
+        n_before = len(train_dataset)
+        train_dataset = train_dataset.filter(
+            lambda x: x["audio_duration"] <= max_audio_length,
+            num_proc=num_proc,
+            desc="Removing long samples in train split"
+        )
+        logging.info(f"Removed {n_before - len(train_dataset)} long samples from train split")
+
+        n_before = len(dev_dataset)
+        dev_dataset = dev_dataset.filter(
+            lambda x: x["audio_duration"] <= max_audio_length,
+            num_proc=num_proc,
+            desc="Removing long samples in validation split"
+        )
+        logging.info(f"Removed {n_before - len(dev_dataset)} long samples from validation split")
+
     def _is_valid_audio(x):
         try:
             arr = x["audio"]["array"]
@@ -250,17 +264,15 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
             return False
 
     n_before = len(train_dataset)
-    train_dataset = train_dataset.filter(_is_valid_audio, num_proc=4,
+    train_dataset = train_dataset.filter(_is_valid_audio, num_proc=num_proc,
                                          desc="Removing corrupt audio from train split")
     logging.info(f"Removed {n_before - len(train_dataset)} corrupt audio samples from train split")
 
     n_before = len(dev_dataset)
-    dev_dataset = dev_dataset.filter(_is_valid_audio, num_proc=4,
+    dev_dataset = dev_dataset.filter(_is_valid_audio, num_proc=num_proc,
                                      desc="Removing corrupt audio from validation split")
     logging.info(f"Removed {n_before - len(dev_dataset)} corrupt audio samples from dev split")
 
-
-    # if there is a column called "audio_filepath" rename it to "audio"
     if "audio_filepath" in train_dataset.column_names:
         train_dataset = train_dataset.rename_column("audio_filepath", "audio")
     elif "audio" in train_dataset.column_names:
@@ -269,8 +281,7 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
         raise ValueError(f"Audio filepath column was not found in train dataset,"
                          f"which should be called 'audio_filepath' or 'audio'."
                          f"Found columns: {train_dataset.column_names}.")
-    
-    # same for dev dataset  
+
     if "audio_filepath" in dev_dataset.column_names:
         dev_dataset = dev_dataset.rename_column("audio_filepath", "audio")
     elif "audio" in dev_dataset.column_names:
@@ -279,70 +290,40 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
         raise ValueError(f"Audio filepath column was not found in validation dataset,"
                          f"which should be called 'audio_filepath' or 'audio'."
                          f"Found columns: {dev_dataset.column_names}.")
-    
-    # Remove features not used in training 
+
     logging.info(f"Removing unnecessary columns...")
     features_to_keep = [
-        "audio", "transcription", "audio_duration", "language",
+        "audio", "transcription", "audio_duration",
     ]
+    if dialect_col:
+        features_to_keep.append(dialect_col)
 
     features_to_remove = [f for f in train_dataset.features if f not in features_to_keep]
-
     train_dataset = train_dataset.remove_columns(features_to_remove)
     dev_dataset = dev_dataset.remove_columns(features_to_remove)
-    
-    # # remove samples that are longer than a max duration threshold
-    # max_duration = 42.0 
-    # logging.info(f"Removing samples that are longer than {max_duration} seconds...")
-    # train_dataset = train_dataset.filter(
-    #     lambda x: x["audio_duration"] < max_duration,
-    #     num_proc=4,  # Use multiple CPU cores for parallel processing
-    #     desc="Removing long samples in train split"
-    # )
 
-    # dev_dataset = dev_dataset.filter(
-    #     lambda x: x["audio_duration"] < max_duration,
-    #     num_proc=4,  # Use multiple CPU cores for parallel processing
-    #     desc="Removing long samples in validation split"
-    # )
-
-    # # remove samples that are shorter than one second
-    # logging.info(f"Removing samples that are shorter than one second...")
-    # train_dataset = train_dataset.filter(
-    #     lambda x: x["audio_duration"] > 1.0,
-    #     num_proc=4,  # Use multiple CPU cores for parallel processing
-    #     desc="Removing short samples in train split"
-    # )
-    # dev_dataset = dev_dataset.filter(
-    #     lambda x: x["audio_duration"] > 1.0,
-    #     num_proc=4,  # Use multiple CPU cores for parallel processing
-    #     desc="Removing short samples in validation split"
-    # )
-
-    # Preprocess text transcripts by removing special characters
     logging.info(f"Preprocessing text transcripts...")
     train_dataset = train_dataset.map(
         lambda batch: clean_text_batch(batch, config.character_set, config.apply_accent_replacements),
         batched=True,
         batch_size=64,
-        num_proc=8,
+        num_proc=num_proc,
         desc="Cleaning text transcripts in train split"
     )
     dev_dataset = dev_dataset.map(
         lambda batch: clean_text_batch(batch, config.character_set, config.apply_accent_replacements),
         batched=True,
         batch_size=64,
-        num_proc=8,
+        num_proc=num_proc,
         desc="Cleaning text transcripts in validation split"
     )
 
-    # add language tokens to the beginning of the transcription
-    if config.add_language_tokens and config.language == "all":        
+    if config.add_language_tokens and config.language == "all":
         train_dataset = train_dataset.map(
             lambda batch: add_language_tag_to_transcript(batch),
             batched=True,
             batch_size=16,
-            num_proc=8,
+            num_proc=num_proc,
             desc="Adding language tags to train transcriptions"
         )
 
@@ -350,9 +331,16 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
             lambda batch: add_language_tag_to_transcript(batch),
             batched=True,
             batch_size=16,
-            num_proc=8,
+            num_proc=num_proc,
             desc="Adding language tags to validation transcriptions"
         )
+
+    total_train_secs = sum(float(d) for d in train_dataset["audio_duration"])
+    total_eval_secs = sum(float(d) for d in dev_dataset["audio_duration"])
+    logging.info(f"Final datasets: train={len(train_dataset)} samples "
+                 f"({total_train_secs/3600:.2f}h), "
+                 f"eval={len(dev_dataset)} samples "
+                 f"({total_eval_secs/3600:.2f}h)")
 
     return train_dataset, dev_dataset
 
@@ -360,12 +348,11 @@ def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
 def add_language_tag_to_transcript(batch: Dict[str, Any]) -> Dict[str, Any]:
     """Add language tags to the beginning of the transcription"""
 
-    # word delimiter "|" was used instead of space after language tag
-    # tokenizer strips whitespace around special tags like [AMHARIC],
-    # but "|" is encoded as a regular token (mapped to space in vocab)
+    lang_key = "language" if "language" in batch else "dialect"
+
     batch["clean_transcription"] = [
         f"[{lang.upper()}]|{trans}"
-        for lang, trans in zip(batch["language"], batch["clean_transcription"])
+        for lang, trans in zip(batch[lang_key], batch["clean_transcription"])
     ]
 
     return batch
