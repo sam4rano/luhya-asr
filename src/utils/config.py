@@ -40,6 +40,12 @@ class ASRConfig:
     # final_dropout: float = 0.0        # optional, default 0.0
     ctc_zero_infinity: bool = True
 
+    # Performance optimizations
+    use_torch_compile: bool = False
+    torch_compile_mode: str = "reduce-overhead"  # "default", "reduce-overhead", "max-autotune"
+    group_by_length: bool = True
+    use_fused_optimizer: bool = False
+    persistent_workers: bool = True
        
     # Step-based training settings
     max_steps: int = -1  # -1 means train for specified epochs, positive value means train for that many steps

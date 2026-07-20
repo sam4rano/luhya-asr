@@ -40,16 +40,19 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         per_device_eval_batch_size=config.batch_size,
         #eval_accumulation_steps=1024,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        dataloader_num_workers=4, 
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_persistent_workers=getattr(config, "persistent_workers", True),
         #ddp_find_unused_parameters=True, # this is the key parameter for distributed training
         #ddp_backend="nccl",
-        fp16=config.fp16,  # Enable mixed precision
-        bf16=config.bf16,  # Enable bfloat16 precision
+        fp16=config.fp16,
+        bf16=config.bf16,
         #dataloader_pin_memory=False,
         eval_strategy="steps",
-        num_train_epochs=num_train_epochs,  # always a number, never None
+        num_train_epochs=num_train_epochs,
         max_steps=max_steps,
         gradient_checkpointing=config.gradient_checkpointing,
+        optim="adamw_torch_fused" if getattr(config, "use_fused_optimizer", False) else "adamw_torch",
         adam_beta1=0.9,
         adam_beta2=0.98,
         adam_epsilon=1e-08,
@@ -65,7 +68,7 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         report_to=config.report_to,
         load_best_model_at_end=True,
         metric_for_best_model="score",
-        greater_is_better=True, # this is only True when score is defined as (1 - error_rate) * 100, for CER and WER this should be False
+        greater_is_better=True,
     )  
 
 
@@ -118,7 +121,8 @@ def create_asr_trainer(
         eval_dataset=eval_dataset,
         processing_class=processor.feature_extractor,
         data_collator=data_collator,
-        compute_metrics=asr_metrics.compute_metrics
+        compute_metrics=asr_metrics.compute_metrics,
+        group_by_length=getattr(config, "group_by_length", True),
     )
     
     return trainer

@@ -41,6 +41,13 @@ validation_split_pct: 0.2
 max_audio_length: 30.0
 num_proc: 2
 
+# Performance optimizations
+use_torch_compile: false        # enable on A100/L4 runs; T4 benefit is modest
+torch_compile_mode: "reduce-overhead"
+group_by_length: true
+use_fused_optimizer: false
+persistent_workers: true
+
 sample: false
 sample_size: 1000
 

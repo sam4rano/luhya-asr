@@ -1,5 +1,6 @@
 # src/models/factory.py
 from typing import Optional, Union
+import logging
 import torch
 from transformers import Wav2Vec2ForCTC, AutoModelForCTC, Wav2Vec2Processor, AutoConfig
 from src.utils.config import ASRConfig
@@ -171,6 +172,15 @@ def create_asr_model(config: ASRConfig,
     # if model is based on wav2vec2, freeze feature encoder if specified
     if hasattr(model, 'freeze_feature_encoder') and config.freeze_feature_encoder:
         model.freeze_feature_encoder()
+
+    # torch.compile for faster training (PyTorch 2.0+)
+    if getattr(config, "use_torch_compile", False):
+        compile_mode = getattr(config, "torch_compile_mode", "reduce-overhead")
+        if hasattr(torch, "compile"):
+            logging.info(f"Applying torch.compile with mode='{compile_mode}'")
+            model = torch.compile(model, mode=compile_mode)
+        else:
+            logging.warning("torch.compile not available (requires PyTorch >= 2.0)")
 
     return model
 

@@ -16,7 +16,7 @@ add_final_layer_adapter: true
 # Training
 batch_size: 4                 # effective batch = 4 * 8 = 32
 gradient_accumulation_steps: 8
-num_epochs: 8                 # train more epochs (was 25 with early stop at 2)
+num_epochs: 5                 # train more epochs (was 25 with early stop at 2)
 max_steps: -1                 # -1 to use epochs instead of step-based training
 learning_rate: 0.00005        # 5e-5
 warmup_ratio: 0.1             # 10 % warmup
@@ -41,6 +41,13 @@ validation_split_pct: 0.2     # 20% of data for validation (overrides eval_split
 # Memory safety -- prevent RAM ballooning at 40h
 max_audio_length: 30.0        # drop samples >30s (memory spikes from very long audio)
 num_proc: 4                   # CPU processes for dataset preprocessing (lower = less RAM)
+
+# Performance optimizations
+use_torch_compile: false        # torch.compile can give 5-15% speedup (set true to enable)
+torch_compile_mode: "reduce-overhead"  # "default", "reduce-overhead", "max-autotune"
+group_by_length: true           # bucket similar-length samples together (15-30% less padding)
+use_fused_optimizer: false      # CUDA-fused AdamW (3-8% speedup; false until tested)
+persistent_workers: true        # keep dataloader workers alive between epochs
 
 sample: false
 sample_size: 1000
