@@ -82,12 +82,12 @@ def setup_environment():
     """Set up necessary environment variables."""
     # Get API keys from environment (assumes they're already set)
     wandb_key = os.environ.get("WANDB_API_KEY")
-    hf_key = os.environ.get("HF_API_KEY")
+    hf_key = os.environ.get("HF_TOKEN")
     
     if not wandb_key:
         logging.warning("WANDB_API_KEY not found in environment variables")
     if not hf_key:
-        logging.warning("HF_API_KEY not found in environment variables")
+        logging.warning("HF_TOKEN not found in environment variables")
 
 # setup random seeds in numpy, torch, and huggingface for reproducibility
 def setup_seed(seed: int):
@@ -154,11 +154,11 @@ def main():
     
     # log in to huggingface
     logging.info("Logging in to Hugging Face...")
-    if os.environ.get("HF_API_KEY"):
-        hf_login(token=os.environ["HF_API_KEY"])
+    if os.environ.get("HF_TOKEN"):
+        hf_login(token=os.environ["HF_TOKEN"])
         logging.info("Successfully logged in to Hugging Face 🤗")
     else:
-        logging.warning("HF_API_KEY not found in environment variables. "
+        logging.warning("HF_TOKEN not found in environment variables. "
                         "Hugging Face login will be disabled 😔")
 
     # create output directory 
@@ -285,10 +285,10 @@ def main():
 
 
     # push model to Hugging Face Hub as a private model
-    # if os.environ.get("HF_API_KEY"):
+    # if os.environ.get("HF_TOKEN"):
     #     model.push_to_hub(
     #         repo_id=f"badrex/{experiment_name}",
-    #         use_auth_token=os.environ["HF_API_KEY"],
+    #         use_auth_token=os.environ["HF_TOKEN"],
     #         private=True
     #     )
     #     logging.info(f"Pushed model to Hugging Face Hub: badrex/{experiment_name}")
