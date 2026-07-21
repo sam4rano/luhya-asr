@@ -38,16 +38,12 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         output_dir=output_dir,
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size,
-        #eval_accumulation_steps=1024,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
         dataloader_persistent_workers=getattr(config, "persistent_workers", True),
-        #ddp_find_unused_parameters=True, # this is the key parameter for distributed training
-        #ddp_backend="nccl",
         fp16=config.fp16,
         bf16=config.bf16,
-        #dataloader_pin_memory=False,
         eval_strategy="steps",
         num_train_epochs=num_train_epochs,
         max_steps=max_steps,
@@ -69,6 +65,8 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         load_best_model_at_end=True,
         metric_for_best_model="score",
         greater_is_better=True,
+        train_sampling_strategy="group_by_length" if getattr(config, "group_by_length", True) else "random",
+        length_column_name="length",
     )  
 
 
@@ -112,7 +110,7 @@ def create_asr_trainer(
         cer_metric=evaluate.load("cer"),
         output_dir= os.path.join(training_args.output_dir, "predictions_json")
     )
-    
+
     # Create trainer
     trainer = Trainer(
         model=model,
@@ -122,7 +120,6 @@ def create_asr_trainer(
         processing_class=processor.feature_extractor,
         data_collator=data_collator,
         compute_metrics=asr_metrics.compute_metrics,
-        group_by_length=getattr(config, "group_by_length", True),
     )
     
     return trainer
