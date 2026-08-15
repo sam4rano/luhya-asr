@@ -78,7 +78,8 @@ class ASRConfig:
         "mHuBERT-147": "utter-project/mHuBERT-147",
         "w2v-BERT": "facebook/w2v-bert-2.0",
         "mms-300m": "facebook/mms-300m",
-        "mms-1b": "facebook/mms-1b-all"
+        "mms-1b": "facebook/mms-1b-all",
+        
     })
     
 
