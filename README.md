@@ -115,6 +115,7 @@ split manifest, preventing a bad file from wasting a multi-hour GPU run.
 - Notebook: `notebooks/train_luhya_whisper_kaggle.ipynb`
 - Trainer: `scripts/train_whisper.py`
 - Configuration: `config_files/ASR_train_config_whisper_small_kaggle.yaml`
+- Model card: `model_cards/whisper-small-luhya/README.md`
 - Kaggle dependencies: `requirements-kaggle.txt`
 
 The Whisper path is intentionally separate from the CTC trainer. It computes

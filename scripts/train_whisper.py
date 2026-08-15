@@ -474,14 +474,27 @@ class WhisperSpeechCollator:
 
 
 class WhisperMetrics:
-    def __init__(self, processor: WhisperProcessor):
+    def __init__(self, processor: WhisperProcessor, expected_rows: int | None = None):
         self.processor = processor
+        self.expected_rows = expected_rows
+
+    def set_expected_rows(self, expected_rows: int) -> None:
+        self.expected_rows = expected_rows
 
     def __call__(self, prediction: Any) -> dict[str, float]:
         predicted_ids = prediction.predictions
         if isinstance(predicted_ids, tuple):
             predicted_ids = predicted_ids[0]
         label_ids = np.array(prediction.label_ids, copy=True)
+        if self.expected_rows is not None:
+            if len(predicted_ids) < self.expected_rows or len(label_ids) < self.expected_rows:
+                raise ValueError(
+                    "Gathered metric tensors are shorter than the expected split: "
+                    f"predictions={len(predicted_ids)}, labels={len(label_ids)}, "
+                    f"expected={self.expected_rows}"
+                )
+            predicted_ids = predicted_ids[: self.expected_rows]
+            label_ids = label_ids[: self.expected_rows]
         label_ids[label_ids == -100] = self.processor.tokenizer.pad_token_id
         predictions = self.processor.tokenizer.batch_decode(
             predicted_ids, skip_special_tokens=True
@@ -737,6 +750,10 @@ def main() -> None:
     if patience > 0 and not args.smoke_test and not args.evaluation_only:
         callbacks.append(EarlyStoppingCallback(early_stopping_patience=patience))
 
+    metric_computer = WhisperMetrics(
+        processor,
+        expected_rows=len(splits["validation"]),
+    )
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
@@ -744,7 +761,7 @@ def main() -> None:
         eval_dataset=splits["validation"],
         data_collator=collator,
         processing_class=processor,
-        compute_metrics=WhisperMetrics(processor),
+        compute_metrics=metric_computer,
         callbacks=callbacks,
     )
 
@@ -776,12 +793,14 @@ def main() -> None:
         trainer.log_metrics("train", train_metrics)
         trainer.save_metrics("train", train_metrics)
 
+    metric_computer.set_expected_rows(len(splits["validation"]))
     validation_metrics = trainer.evaluate(
         eval_dataset=splits["validation"], metric_key_prefix="validation"
     )
     trainer.log_metrics("validation", validation_metrics)
     trainer.save_metrics("validation", validation_metrics)
 
+    metric_computer.set_expected_rows(len(splits["test"]))
     test_output = trainer.predict(splits["test"], metric_key_prefix="test")
     trainer.log_metrics("test", test_output.metrics)
     trainer.save_metrics("test", test_output.metrics)

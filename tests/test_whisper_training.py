@@ -12,6 +12,7 @@ from scripts.train_whisper import (
     ensure_three_splits,
     limit_dataset_hours,
     normalize_text,
+    WhisperMetrics,
     write_predictions,
 )
 
@@ -65,6 +66,18 @@ class WhisperTrainingUtilitiesTest(unittest.TestCase):
 
         self.assertEqual(len(rows), 2)
         self.assertEqual([row["prediction"] for row in rows], ["10", "20"])
+
+    def test_metrics_ignore_distributed_padding(self):
+        metric = WhisperMetrics(FakeProcessor(), expected_rows=2)
+        output = SimpleNamespace(
+            predictions=np.array([[10], [20], [99], [99]]),
+            label_ids=np.array([[10], [20], [11], [21]]),
+        )
+
+        result = metric(output)
+
+        self.assertEqual(result["wer"], 0.0)
+        self.assertEqual(result["cer"], 0.0)
 
     def test_missing_splits_are_rebuilt_by_speaker(self):
         raw = DatasetDict(train=Dataset.from_dict(self.rows))
