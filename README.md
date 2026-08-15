@@ -108,6 +108,10 @@ pipeline for fine-tuning `openai/whisper-small` on
 `Digital-Divide-Data/Luhya-ASR-Data-subset-50h`, with the training split
 deterministically limited to at most 40 hours:
 
+During the duration pass, every clip is decoded once on CPU. Corrupt or empty
+audio rows are removed before training and their counts are recorded in the
+split manifest, preventing a bad file from wasting a multi-hour GPU run.
+
 - Notebook: `notebooks/train_luhya_whisper_kaggle.ipynb`
 - Trainer: `scripts/train_whisper.py`
 - Configuration: `config_files/ASR_train_config_whisper_small_kaggle.yaml`

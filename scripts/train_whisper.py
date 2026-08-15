@@ -103,17 +103,18 @@ def _audio_samples(audio: Any) -> tuple[np.ndarray, int]:
     return np.ascontiguousarray(array.squeeze()), sample_rate
 
 
-def _duration_from_audio(audio: Any) -> dict[str, float]:
-    metadata = getattr(audio, "metadata", None)
-    if metadata is not None:
-        duration = getattr(metadata, "duration_seconds", None)
-        if duration is None:
-            duration = getattr(metadata, "duration_seconds_from_header", None)
-        if duration is not None and float(duration) > 0:
-            return {"audio_duration": float(duration)}
+def _duration_from_audio(audio: Any) -> dict[str, float | bool]:
+    """Decode once so corrupt/empty clips are removed before GPU training."""
+    try:
+        array, sample_rate = _audio_samples(audio)
+    except Exception:
+        # A single broken file must not abort a multi-hour training job. The
+        # validity flag is filtered below before the data reaches the collator.
+        return {"audio_duration": 0.0, "audio_is_valid": False}
 
-    array, sample_rate = _audio_samples(audio)
-    return {"audio_duration": float(len(array) / sample_rate)}
+    is_valid = sample_rate > 0 and array.size > 0
+    duration = float(array.size / sample_rate) if is_valid else 0.0
+    return {"audio_duration": duration, "audio_is_valid": is_valid}
 
 
 def _normalize_text_row(text: Any, lowercase: bool) -> dict[str, str]:
@@ -349,6 +350,7 @@ def prepare_splits(
         lowercase = bool(config.get("lowercase", True))
 
         prepared = DatasetDict()
+        filtering_stats: dict[str, dict[str, int]] = {}
         for split_name, dataset in splits.items():
             dataset = dataset.cast_column(audio_column, Audio(sampling_rate=sampling_rate))
             dataset = dataset.map(
@@ -364,14 +366,35 @@ def prepare_splits(
                 num_proc=num_proc,
                 desc=f"Normalizing {split_name} transcripts",
             )
-            dataset = dataset.filter(
-                lambda duration, text: (
-                    min_duration <= float(duration) <= max_duration and bool(text.strip())
-                ),
-                input_columns=["audio_duration", "normalized_text"],
-                num_proc=num_proc,
-                desc=f"Filtering {split_name} by duration/text",
+            rows_before_filter = len(dataset)
+            invalid_audio_rows = sum(
+                not bool(value) for value in dataset["audio_is_valid"]
             )
+            dataset = dataset.filter(
+                lambda is_valid, duration, text: (
+                    bool(is_valid)
+                    and min_duration <= float(duration) <= max_duration
+                    and bool(text.strip())
+                ),
+                input_columns=[
+                    "audio_is_valid",
+                    "audio_duration",
+                    "normalized_text",
+                ],
+                num_proc=num_proc,
+                desc=f"Filtering {split_name} invalid audio/duration/text",
+            )
+            filtering_stats[split_name] = {
+                "invalid_audio_removed": invalid_audio_rows,
+                "all_filtered_rows_removed": rows_before_filter - len(dataset),
+            }
+            if invalid_audio_rows:
+                LOGGER.warning(
+                    "%s: removed %d corrupt or empty audio row(s)",
+                    split_name,
+                    invalid_audio_rows,
+                )
+            dataset = dataset.remove_columns("audio_is_valid")
             if split_name == "train":
                 dataset = limit_dataset_hours(
                     dataset,
@@ -388,6 +411,7 @@ def prepare_splits(
         "speaker_column": speaker_column,
         "speaker_overlap_counts": overlaps,
         "max_train_hours": float(config.get("max_train_hours", 0.0)),
+        "filtering": filtering_stats,
         "splits": {},
     }
     for name, dataset in prepared.items():

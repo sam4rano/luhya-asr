@@ -2,7 +2,17 @@ import unittest
 
 from datasets import Dataset, DatasetDict
 
-from scripts.train_whisper import ensure_three_splits, limit_dataset_hours, normalize_text
+from scripts.train_whisper import (
+    _duration_from_audio,
+    ensure_three_splits,
+    limit_dataset_hours,
+    normalize_text,
+)
+
+
+class BrokenAudio:
+    def get_all_samples(self):
+        raise RuntimeError("No audio frames were decoded")
 
 
 class WhisperTrainingUtilitiesTest(unittest.TestCase):
@@ -15,6 +25,12 @@ class WhisperTrainingUtilitiesTest(unittest.TestCase):
 
     def test_normalize_text(self):
         self.assertEqual(normalize_text("  LUKHAYO’  Mulembe  "), "lukhayo' mulembe")
+
+    def test_corrupt_audio_is_marked_invalid_instead_of_crashing(self):
+        result = _duration_from_audio(BrokenAudio())
+
+        self.assertEqual(result["audio_duration"], 0.0)
+        self.assertFalse(result["audio_is_valid"])
 
     def test_missing_splits_are_rebuilt_by_speaker(self):
         raw = DatasetDict(train=Dataset.from_dict(self.rows))
