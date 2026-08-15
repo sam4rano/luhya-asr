@@ -1,0 +1,62 @@
+# Kaggle T4 x2 configuration for multilingual Whisper Small on Luhya ASR.
+# The 40h dataset currently requires an HF_TOKEN with access permission.
+
+project: "Luhya-ASR-Whisper"
+output_dir: "/kaggle/working/luhya-asr-output/whisper-small-luhya"
+cache_dir: "/kaggle/temp/huggingface-cache"
+seed: 42
+
+dataset_path: "Digital-Divide-Data/Luhya-ASR-Data-subset-40h"
+dataset_revision: "main"
+audio_column: "audio"
+text_column: "transcript"
+speaker_column: "user_id"
+sampling_rate: 16000
+
+# Existing validation/test splits are retained when both exist and are speaker-disjoint.
+# Missing splits or detected speaker overlap trigger a deterministic 80/10/10 rebuild.
+validation_ratio: 0.10
+test_ratio: 0.10
+rebuild_splits_on_speaker_overlap: true
+min_audio_length: 0.20
+max_audio_length: 30.0
+lowercase: true
+preprocessing_num_proc: 4
+
+model_name: "openai/whisper-small"
+# Whisper has no official Luhya/luy language token. Swahili is used only as a
+# documented Bantu-language conditioning proxy; all targets and outputs are Luhya.
+language: "swahili"
+language_token_note: "Proxy conditioning token only; the trained ASR target is Luhya."
+task: "transcribe"
+attn_implementation: "sdpa"
+freeze_encoder: false
+
+# Per optimizer update: 4 samples x 2 GPUs x 4 accumulation = global batch 32.
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 4
+num_train_epochs: 5
+max_steps: -1
+learning_rate: 0.00001
+weight_decay: 0.01
+warmup_steps: 0.05                 # Fraction of total optimizer steps in Transformers 5.x
+max_grad_norm: 1.0
+
+fp16: true
+bf16: false
+gradient_checkpointing: true
+optim: "adamw_torch_fused"
+torch_compile: false
+
+# Validation is small enough for generated WER/CER, but is not run excessively.
+eval_steps: 500
+save_steps: 500
+logging_steps: 20
+save_total_limit: 1
+early_stopping_patience: 3
+generation_max_length: 225
+generation_num_beams: 1
+
+# Two workers per DDP process keeps four Kaggle CPU workers feeding two T4s.
+dataloader_num_workers: 2

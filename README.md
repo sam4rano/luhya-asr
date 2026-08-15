@@ -100,3 +100,54 @@ Model on HuggingFace Hub: [Sam4rano/luhya-asr-w2v-BERT](https://huggingface.co/S
 - Cross-validation folds, speaker-independent test sets
 - ONNX export / TorchScript for real-time inference
 - Multilingual: add related Bantu languages
+
+## Whisper Small on Kaggle T4 x2
+
+The repository also contains a separate Kaggle-native sequence-to-sequence
+pipeline for fine-tuning `openai/whisper-small` on
+`Digital-Divide-Data/Luhya-ASR-Data-subset-40h`:
+
+- Notebook: `notebooks/train_luhya_whisper_kaggle.ipynb`
+- Trainer: `scripts/train_whisper.py`
+- Configuration: `config_files/ASR_train_config_whisper_small_kaggle.yaml`
+- Kaggle dependencies: `requirements-kaggle.txt`
+
+The Whisper path is intentionally separate from the CTC trainer. It computes
+log-Mel features in the data loader instead of storing a large encoded dataset,
+uses both T4 GPUs through DDP, retains only one resumable checkpoint, applies
+early stopping, and writes validation/test WER and CER without W&B.
+
+The data loader keeps existing validation and test splits when they are both
+present and speaker-disjoint. If either split is missing, or `user_id` overlap
+is detected, it deterministically rebuilds 80/10/10 speaker-disjoint splits.
+The chosen policy, counts, hours, fingerprints, and overlap checks are recorded
+in `evaluation_summary.json`.
+
+Whisper does not provide an official Luhya (`luy`) language token. This baseline
+uses the Swahili token only as a documented conditioning proxy; training labels
+and decoded outputs remain Luhya. Do not describe the resulting model as a
+Swahili ASR model.
+
+### Kaggle run
+
+Create a Kaggle notebook with Internet enabled, choose **GPU T4 x2**, and add an
+`HF_TOKEN` secret that has access to the dataset. The included notebook first
+runs a two-step smoke test, then launches the full run with:
+
+```bash
+accelerate launch --multi_gpu --num_processes 2 --mixed_precision fp16 \
+  --num_cpu_threads_per_process 2 \
+  scripts/train_whisper.py \
+  --config config_files/ASR_train_config_whisper_small_kaggle.yaml \
+  --resume_from_checkpoint latest
+```
+
+The optimizer global batch is `4 per GPU x 2 GPUs x 4 accumulation = 32`.
+Final artifacts are written under
+`/kaggle/working/luhya-asr-output/whisper-small-luhya/`:
+
+- `evaluation_summary.json`: configuration, split audit, and all metrics
+- `metrics_summary.csv`: presentation-ready validation/test WER and CER
+- `test_predictions.csv`: reference/prediction pairs for error analysis
+- `validation_results.json`, `test_results.json`, `train_results.json`
+- `final-model/`: the selected best checkpoint and processor
