@@ -156,3 +156,13 @@ Final artifacts are written under
 - `test_predictions.csv`: reference/prediction pairs for error analysis
 - `validation_results.json`, `test_results.json`, `train_results.json`
 - `final-model/`: the selected best checkpoint and processor
+
+If training and metric computation finish but artifact export is interrupted,
+regenerate validation/test artifacts from the saved model without retraining:
+
+```bash
+accelerate launch --multi_gpu --num_processes 2 --mixed_precision fp16 \
+  --num_cpu_threads_per_process 2 scripts/train_whisper.py \
+  --config config_files/ASR_train_config_whisper_small_kaggle.yaml \
+  --evaluation_only
+```

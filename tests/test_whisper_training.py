@@ -1,5 +1,10 @@
+import csv
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 from datasets import Dataset, DatasetDict
 
 from scripts.train_whisper import (
@@ -7,12 +12,25 @@ from scripts.train_whisper import (
     ensure_three_splits,
     limit_dataset_hours,
     normalize_text,
+    write_predictions,
 )
 
 
 class BrokenAudio:
     def get_all_samples(self):
         raise RuntimeError("No audio frames were decoded")
+
+
+class FakeTokenizer:
+    pad_token_id = 0
+
+    def batch_decode(self, rows, skip_special_tokens=True):
+        del skip_special_tokens
+        return [str(int(row[0])) for row in rows]
+
+
+class FakeProcessor:
+    tokenizer = FakeTokenizer()
 
 
 class WhisperTrainingUtilitiesTest(unittest.TestCase):
@@ -31,6 +49,22 @@ class WhisperTrainingUtilitiesTest(unittest.TestCase):
 
         self.assertEqual(result["audio_duration"], 0.0)
         self.assertFalse(result["audio_is_valid"])
+
+    def test_prediction_export_trims_distributed_padding(self):
+        dataset = Dataset.from_dict({"audio_duration": [1.0, 2.0]})
+        output = SimpleNamespace(
+            predictions=np.array([[10], [20], [10], [20]]),
+            label_ids=np.array([[11], [21], [11], [21]]),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "predictions.csv"
+            write_predictions(path, output, FakeProcessor(), dataset, None)
+            with open(path, newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row["prediction"] for row in rows], ["10", "20"])
 
     def test_missing_splits_are_rebuilt_by_speaker(self):
         raw = DatasetDict(train=Dataset.from_dict(self.rows))

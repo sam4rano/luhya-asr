@@ -56,6 +56,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run two training steps on small deterministic subsets before the full run",
     )
+    parser.add_argument(
+        "--evaluation_only",
+        action="store_true",
+        help="Load the saved final model (or latest checkpoint) and regenerate evaluations",
+    )
     return parser.parse_args()
 
 
@@ -532,6 +537,24 @@ def write_predictions(
     durations = [float(value) for value in test_dataset["audio_duration"]]
     speakers = test_dataset[speaker_column] if speaker_column else None
 
+    expected_rows = len(test_dataset)
+    if len(predictions) < expected_rows or len(references) < expected_rows:
+        raise ValueError(
+            "Prediction output is shorter than the test dataset: "
+            f"predictions={len(predictions)}, references={len(references)}, "
+            f"test_rows={expected_rows}"
+        )
+    if len(predictions) > expected_rows or len(references) > expected_rows:
+        LOGGER.warning(
+            "Trimming distributed evaluation padding: predictions=%d, references=%d, "
+            "test_rows=%d",
+            len(predictions),
+            len(references),
+            expected_rows,
+        )
+        predictions = predictions[:expected_rows]
+        references = references[:expected_rows]
+
     with open(path, "w", newline="", encoding="utf-8") as handle:
         fieldnames = ["id", "reference", "prediction", "audio_duration"]
         if speaker_column:
@@ -551,7 +574,10 @@ def write_predictions(
 
 
 def build_training_arguments(
-    config: dict[str, Any], output_dir: Path, smoke_test: bool
+    config: dict[str, Any],
+    output_dir: Path,
+    smoke_test: bool,
+    evaluation_only: bool = False,
 ) -> Seq2SeqTrainingArguments:
     eval_steps = 1 if smoke_test else int(config.get("eval_steps", 500))
     save_steps = 1 if smoke_test else int(config.get("save_steps", eval_steps))
@@ -570,7 +596,7 @@ def build_training_arguments(
 
     return Seq2SeqTrainingArguments(
         output_dir=str(output_dir),
-        do_train=True,
+        do_train=not evaluation_only,
         do_eval=True,
         do_predict=True,
         per_device_train_batch_size=train_batch_size,
@@ -594,7 +620,7 @@ def build_training_arguments(
         save_strategy="steps",
         save_steps=save_steps,
         save_total_limit=int(config.get("save_total_limit", 1)),
-        load_best_model_at_end=True,
+        load_best_model_at_end=not evaluation_only,
         metric_for_best_model="wer",
         greater_is_better=False,
         logging_strategy="steps",
@@ -623,6 +649,8 @@ def build_training_arguments(
 
 def main() -> None:
     args = parse_args()
+    if args.smoke_test and args.evaluation_only:
+        raise ValueError("--smoke_test and --evaluation_only cannot be used together")
     config = load_yaml(args.config)
     state = PartialState()
     setup_logging(state.is_main_process)
@@ -647,16 +675,37 @@ def main() -> None:
     cache_dir = config.get("cache_dir")
     token = os.environ.get("HF_TOKEN")
 
+    final_model_dir = output_dir / "final-model"
+    evaluation_model_source: str | None = None
+    if args.evaluation_only:
+        if final_model_dir.is_dir():
+            evaluation_model_source = str(final_model_dir)
+        else:
+            evaluation_model_source = newest_checkpoint(output_dir)
+        if evaluation_model_source is None:
+            raise FileNotFoundError(
+                f"No final model or checkpoint found under {output_dir}; "
+                "evaluation-only recovery is not possible"
+            )
+        LOGGER.info("Evaluation-only mode: loading %s", evaluation_model_source)
+
+    model_source = evaluation_model_source or model_name
+    processor_source = (
+        str(final_model_dir)
+        if args.evaluation_only and final_model_dir.is_dir()
+        else model_name
+    )
+
     with state.main_process_first():
         processor = WhisperProcessor.from_pretrained(
-            model_name,
+            processor_source,
             language=language,
             task=task,
             cache_dir=cache_dir,
             token=token,
         )
         model = WhisperForConditionalGeneration.from_pretrained(
-            model_name,
+            model_source,
             cache_dir=cache_dir,
             token=token,
             attn_implementation=config.get("attn_implementation", "sdpa"),
@@ -671,7 +720,12 @@ def main() -> None:
     if bool(config.get("freeze_encoder", False)):
         model.freeze_encoder()
 
-    training_args = build_training_arguments(config, output_dir, args.smoke_test)
+    training_args = build_training_arguments(
+        config,
+        output_dir,
+        args.smoke_test,
+        evaluation_only=args.evaluation_only,
+    )
     collator = WhisperSpeechCollator(
         processor=processor,
         audio_column=audio_column,
@@ -680,7 +734,7 @@ def main() -> None:
     )
     callbacks = []
     patience = int(config.get("early_stopping_patience", 3))
-    if patience > 0 and not args.smoke_test:
+    if patience > 0 and not args.smoke_test and not args.evaluation_only:
         callbacks.append(EarlyStoppingCallback(early_stopping_patience=patience))
 
     trainer = Seq2SeqTrainer(
@@ -710,9 +764,17 @@ def main() -> None:
         LOGGER.info("Devices/processes: %d; optimizer global batch: %d", world_size, global_batch)
         LOGGER.info("Split manifest: %s", json.dumps(manifest, indent=2))
 
-    train_result = trainer.train(resume_from_checkpoint=resume)
-    trainer.log_metrics("train", train_result.metrics)
-    trainer.save_metrics("train", train_result.metrics)
+    if args.evaluation_only:
+        train_metrics: dict[str, Any] = {}
+        train_results_path = output_dir / "train_results.json"
+        if train_results_path.is_file():
+            with open(train_results_path, encoding="utf-8") as handle:
+                train_metrics = json.load(handle)
+    else:
+        train_result = trainer.train(resume_from_checkpoint=resume)
+        train_metrics = train_result.metrics
+        trainer.log_metrics("train", train_metrics)
+        trainer.save_metrics("train", train_metrics)
 
     validation_metrics = trainer.evaluate(
         eval_dataset=splits["validation"], metric_key_prefix="validation"
@@ -742,7 +804,7 @@ def main() -> None:
             "world_size": world_size,
             "optimizer_global_batch_size": global_batch,
             "split_manifest": manifest,
-            "train_metrics": train_result.metrics,
+            "train_metrics": train_metrics,
             "validation_metrics": validation_metrics,
             "test_metrics": test_output.metrics,
         }
