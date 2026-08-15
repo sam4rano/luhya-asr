@@ -221,6 +221,35 @@ def _row_split(
     )
 
 
+def limit_dataset_hours(dataset: Dataset, max_hours: float, seed: int) -> Dataset:
+    """Deterministically sample at most ``max_hours`` without exceeding it."""
+    if max_hours <= 0:
+        return dataset
+
+    max_seconds = max_hours * 3600.0
+    total_seconds = sum(float(value) for value in dataset["audio_duration"])
+    if total_seconds <= max_seconds:
+        return dataset
+
+    shuffled = dataset.shuffle(seed=seed)
+    selected_indices: list[int] = []
+    selected_seconds = 0.0
+    for index, raw_duration in enumerate(shuffled["audio_duration"]):
+        duration = float(raw_duration)
+        if selected_seconds + duration <= max_seconds:
+            selected_indices.append(index)
+            selected_seconds += duration
+
+    limited = shuffled.select(selected_indices)
+    LOGGER.info(
+        "Limited training data from %.3f to %.3f hours (%d samples)",
+        total_seconds / 3600.0,
+        selected_seconds / 3600.0,
+        len(limited),
+    )
+    return limited
+
+
 def ensure_three_splits(
     raw: DatasetDict,
     speaker_column: str | None,
@@ -343,6 +372,12 @@ def prepare_splits(
                 num_proc=num_proc,
                 desc=f"Filtering {split_name} by duration/text",
             )
+            if split_name == "train":
+                dataset = limit_dataset_hours(
+                    dataset,
+                    max_hours=float(config.get("max_train_hours", 0.0)),
+                    seed=int(config.get("seed", 42)),
+                )
             prepared[split_name] = dataset
 
     manifest = {
@@ -352,6 +387,7 @@ def prepare_splits(
         "seed": int(config.get("seed", 42)),
         "speaker_column": speaker_column,
         "speaker_overlap_counts": overlaps,
+        "max_train_hours": float(config.get("max_train_hours", 0.0)),
         "splits": {},
     }
     for name, dataset in prepared.items():

@@ -6,7 +6,7 @@ output_dir: "/kaggle/working/luhya-asr-output/whisper-small-luhya"
 cache_dir: "/kaggle/temp/huggingface-cache"
 seed: 42
 
-dataset_path: "Digital-Divide-Data/Luhya-ASR-Data-subset-40h"
+dataset_path: "Digital-Divide-Data/Luhya-ASR-Data-subset-50h"
 dataset_revision: "main"
 audio_column: "audio"
 text_column: "transcript"
@@ -20,6 +20,7 @@ test_ratio: 0.10
 rebuild_splits_on_speaker_overlap: true
 min_audio_length: 0.20
 max_audio_length: 30.0
+max_train_hours: 40.0
 lowercase: true
 preprocessing_num_proc: 4
 

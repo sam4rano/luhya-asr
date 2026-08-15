@@ -2,7 +2,7 @@ import unittest
 
 from datasets import Dataset, DatasetDict
 
-from scripts.train_whisper import ensure_three_splits, normalize_text
+from scripts.train_whisper import ensure_three_splits, limit_dataset_hours, normalize_text
 
 
 class WhisperTrainingUtilitiesTest(unittest.TestCase):
@@ -56,6 +56,20 @@ class WhisperTrainingUtilitiesTest(unittest.TestCase):
             [18, 6, 6],
         )
         self.assertFalse(any(overlaps.values()))
+
+    def test_training_hour_limit_is_deterministic_and_never_exceeded(self):
+        dataset = Dataset.from_dict(
+            {
+                "id": list(range(20)),
+                "audio_duration": [600.0] * 20,
+            }
+        )
+        first = limit_dataset_hours(dataset, max_hours=2.0, seed=42)
+        second = limit_dataset_hours(dataset, max_hours=2.0, seed=42)
+
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(len(first), 12)
+        self.assertLessEqual(sum(first["audio_duration"]), 2.0 * 3600.0)
 
 
 if __name__ == "__main__":

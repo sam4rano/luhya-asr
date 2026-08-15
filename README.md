@@ -105,7 +105,8 @@ Model on HuggingFace Hub: [Sam4rano/luhya-asr-w2v-BERT](https://huggingface.co/S
 
 The repository also contains a separate Kaggle-native sequence-to-sequence
 pipeline for fine-tuning `openai/whisper-small` on
-`Digital-Divide-Data/Luhya-ASR-Data-subset-40h`:
+`Digital-Divide-Data/Luhya-ASR-Data-subset-50h`, with the training split
+deterministically limited to at most 40 hours:
 
 - Notebook: `notebooks/train_luhya_whisper_kaggle.ipynb`
 - Trainer: `scripts/train_whisper.py`
