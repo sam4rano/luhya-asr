@@ -14,9 +14,17 @@ import importlib.metadata
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Make the repository root importable when this script is launched as a file
+# (e.g. via `accelerate launch`), so `src.*` imports resolve the same way they
+# do when the notebook runs `train_model.py`.
+_PROJECT_ROOT = Path(os.path.dirname(os.path.abspath(__file__))).parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("WANDB_DISABLED", "true")
