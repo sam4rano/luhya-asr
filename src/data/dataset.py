@@ -224,7 +224,6 @@ def load_datasets(
         dataset = dataset.map(
             clean_ctc,
             input_columns=[normalized_col],
-            output_columns=["clean_transcription"],
             num_proc=num_proc,
             desc=f"Building CTC transcriptions for {name}",
         )
