@@ -1,8 +1,13 @@
 # src/training/trainer.py
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import torch
-from transformers import Trainer, TrainingArguments, Wav2Vec2Processor
+from transformers import (
+    Trainer,
+    TrainingArguments,
+    Wav2Vec2Processor,
+    EarlyStoppingCallback,
+)
 
 from src.utils.config import ASRConfig
 from src.training.metrics import ASRMetrics, preprocess_logits_for_metrics
@@ -113,6 +118,13 @@ def create_asr_trainer(
         output_dir= os.path.join(training_args.output_dir, "predictions_json")
     )
 
+    # Early stopping on the best validation metric ("score"), matching the
+    # Whisper pipeline's early_stopping_patience for a fair comparison.
+    callbacks: List[Any] = []
+    patience = getattr(config, "early_stopping_patience", 0)
+    if patience > 0:
+        callbacks.append(EarlyStoppingCallback(early_stopping_patience=patience))
+
     # Create trainer
     trainer = Trainer(
         model=model,
@@ -123,6 +135,7 @@ def create_asr_trainer(
         data_collator=data_collator,
         compute_metrics=asr_metrics.compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        callbacks=callbacks,
     )
     trainer.asr_metrics = asr_metrics
     

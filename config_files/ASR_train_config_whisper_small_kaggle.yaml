@@ -1,6 +1,6 @@
 # Kaggle T4 x2 configuration for multilingual Whisper Small on Luhya ASR.
 # Shared comparison protocol with the CTC/Wav2Vec2 pipeline:
-#   - same dataset (DDD-Kenya/Luhya-ASR-Data-subset-50h)
+#   - same dataset (Digital-Divide-Data/Luhya-ASR-Data-subset-50h)
 #   - same deterministic speaker-disjoint 80/10/10 splits (seed 42)
 #   - same audio window: 2-30 seconds
 #   - train split capped at 40 hours
@@ -14,7 +14,7 @@ cache_dir: "/kaggle/temp/huggingface-cache"
 code_revision: null             # notebook replaces this with the checked-out Git SHA
 seed: 42
 
-dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+dataset_path: "Digital-Divide-Data/Luhya-ASR-Data-subset-50h"
 dataset_revision: "main"       # notebook pins this to the resolved dataset SHA
 audio_column: "audio"
 text_column: "transcript"

@@ -21,8 +21,7 @@ gradient_accumulation_steps: 8
 num_epochs: 5
 max_steps: -1
 learning_rate: 0.00001
-warmup_steps: 500
-warmup_ratio: 0.0
+warmup_steps: 500             # absolute steps; keep warmup_ratio unset (None) so it cannot override warmup_steps in Transformers 5.x
 weight_decay: 0.01
 max_grad_norm: 1.0
 fp16: true
@@ -32,9 +31,10 @@ save_steps: 500
 eval_steps: 500
 logging_steps: 20
 save_total_limit: 1
+early_stopping_patience: 3
 
 use_custom_dataset: false
-dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+dataset_path: "Digital-Divide-Data/Luhya-ASR-Data-subset-50h"
 dataset_revision: "main"       # notebook pins this to the resolved dataset SHA
 train_split: "train"
 eval_split: "validation"

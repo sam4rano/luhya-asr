@@ -30,7 +30,7 @@ numbers were **not comparable** (the Whisper model card explicitly flagged this)
 
 | Aspect | Whisper config | Wav2Vec2 config | Impact |
 |---|---|---|---|
-| Dataset source | `Digital-Divide-Data/...` | `DDD-Kenya/...` | two repo IDs for the same data |
+| Dataset source | `Digital-Divide-Data/...` | `DDD-Kenya/...` (deprecated) | two repo IDs for the same data |
 | Split policy | 80/10/10 speaker-disjoint + test | 80/20 random rows, **no test set** | different eval sets → not comparable |
 | Audio window | min 0.2 s, max 30 s | max 30 s only | different clips in/out |
 | Hour cap | 40 h after filtering, at-or-under | 40 h before filtering, may overshoot | different 40 h selection |
@@ -128,7 +128,7 @@ compute corpus-level WER/CER with the **same normalized references**:
 4. **Punctuation/normalization mismatch.** Replaced per-pipeline normalization with
    one shared `canonical_text` policy used for labels and scoring in both pipelines.
 5. **Dataset repo ID.** All configs now point to the currently listed Hub ID,
-   `DDD-Kenya/Luhya-ASR-Data-subset-50h`; the notebook resolves and pins its
+   `Digital-Divide-Data/Luhya-ASR-Data-subset-50h`; the notebook resolves and pins its
    immutable commit SHA before either run starts.
 
 ---
@@ -278,7 +278,7 @@ model cards, and keeps Hub uploads private by default pending license review.
 
 | Parameter | All aligned configs |
 |---|---|
-| dataset_path | `DDD-Kenya/Luhya-ASR-Data-subset-50h` |
+| dataset_path | `Digital-Divide-Data/Luhya-ASR-Data-subset-50h` |
 | validation_ratio / test_ratio | 0.10 / 0.10 |
 | min / max audio | 2.0 / 30.0 s |
 | max_train_hours | 40.0 |

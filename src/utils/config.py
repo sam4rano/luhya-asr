@@ -35,6 +35,7 @@ class ASRConfig:
     eval_steps: int = 400
     logging_steps: int = 10
     save_total_limit: int = 2
+    early_stopping_patience: int = 0  # 0 = no early stopping; >0 = stop after N eval steps without best-metric improvement
 
     # new model config settings
     add_final_layer_adapter: bool = True

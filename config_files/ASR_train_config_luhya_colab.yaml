@@ -2,7 +2,7 @@
 # run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya_colab.yaml
 #
 # Shared comparison protocol with the Whisper pipeline:
-#   - same dataset (DDD-Kenya/Luhya-ASR-Data-subset-50h)
+#   - same dataset (Digital-Divide-Data/Luhya-ASR-Data-subset-50h)
 #   - same deterministic speaker-disjoint 80/10/10 splits (seed 42)
 #   - same audio window: 2-30 seconds
 #   - train split capped at 40 hours
@@ -35,11 +35,12 @@ save_steps: 500
 eval_steps: 500
 logging_steps: 10
 save_total_limit: 1
+early_stopping_patience: 3
 ctc_zero_infinity: true
 
 # Data
 use_custom_dataset: false
-dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+dataset_path: "Digital-Divide-Data/Luhya-ASR-Data-subset-50h"
 dataset_revision: "main"
 train_split: "train"
 eval_split: "validation"

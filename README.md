@@ -40,7 +40,7 @@ Model on HuggingFace Hub: [Sam4rano/luhya-asr-w2v-BERT](https://huggingface.co/S
 
 | | Train | Validation | Test |
 |---|---|---|---|
-| **Source** | `DDD-Kenya/Luhya-ASR-Data-subset-50h` (HF Hub) | same | N/A |
+| **Source** | `Digital-Divide-Data/Luhya-ASR-Data-subset-50h` (HF Hub; formerly `DDD-Kenya/...`, now deprecated) | same | N/A |
 | **Samples** | 6,947 | 400 | — |
 | **Duration** | 20.00 hours | ~1.1 hours | — |
 | **Notes** | Randomly subsampled from 23,198 samples (66.52 h) with 20-hour cap; 1 corrupt sample removed | Used as-is; no hour cap | No independent test split |
@@ -110,7 +110,7 @@ Model on HuggingFace Hub: [Sam4rano/luhya-asr-w2v-BERT](https://huggingface.co/S
 
 The repository also contains a separate Kaggle-native sequence-to-sequence
 pipeline for fine-tuning `openai/whisper-small` on
-`DDD-Kenya/Luhya-ASR-Data-subset-50h`, with the training split
+`Digital-Divide-Data/Luhya-ASR-Data-subset-50h`, with the training split
 deterministically limited to at most 40 hours:
 
 During the duration pass, every clip is decoded once on CPU. Corrupt or empty
@@ -129,7 +129,7 @@ Use `luhya-asr-whisper-small.ipynb` for the current Kaggle experiment. Despite
 its legacy filename, it now orchestrates **both** `openai/whisper-small` and
 `facebook/w2v-bert-2.0` sequentially on T4 x2. It:
 
-- resolves `DDD-Kenya/Luhya-ASR-Data-subset-50h` once and pins its immutable SHA;
+- resolves `Digital-Divide-Data/Luhya-ASR-Data-subset-50h` once and pins its immutable SHA;
 - runs a two-step smoke test for each model before full training;
 - resumes each model independently from its latest checkpoint;
 - uses the same shared split/filter/text policy for both models;
