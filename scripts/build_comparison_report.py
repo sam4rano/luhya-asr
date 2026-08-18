@@ -409,7 +409,8 @@ with the trainer summaries.
     for label, run_dir in run_dirs.items():
         final_model_dir = run_dir / "final-model"
         if not final_model_dir.is_dir():
-            raise FileNotFoundError(f"Missing final model directory: {final_model_dir}")
+            print(f"Skipping model-card update for {label}: {final_model_dir} is missing")
+            continue
         (final_model_dir / "README.md").write_text(
             model_card(label, summaries[label], exact[label]),
             encoding="utf-8",

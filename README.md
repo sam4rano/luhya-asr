@@ -127,7 +127,7 @@ split manifest, preventing a bad file from wasting a multi-hour GPU run.
 
 Use `luhya-asr-whisper-small.ipynb` for the current Kaggle experiment. Despite
 its legacy filename, it now orchestrates **both** `openai/whisper-small` and
-`facebook/w2v-bert-2.0` sequentially on T4 x2. It:
+`facebook/w2v-bert-2.0`. It:
 
 - resolves `Digital-Divide-Data/Luhya-ASR-Data-subset-50h` once and pins its immutable SHA;
 - runs a two-step smoke test for each model before full training;
@@ -136,9 +136,22 @@ its legacy filename, it now orchestrates **both** `openai/whisper-small` and
 - regenerates exact held-out prediction artifacts without retraining;
 - refuses to generate a comparison when manifests or paired references differ;
 - builds model cards and a shareable Markdown/CSV comparison report;
-- optionally uploads both final models to private Hugging Face repositories;
-- optionally commits bounded aggregate results to GitHub, excluding weights and
-  speaker-level predictions by default.
+- optionally uploads the final models to private Hugging Face repositories;
+- optionally commits bounded aggregate results to GitHub, excluding weights.
+
+**One model per session.** The full 54.5 h audio cache plus both models'
+artifacts exceed comfortable Kaggle limits in a single session, so the notebook
+uses a `MODEL_SESSION` selector and is run in three fresh T4 x2 sessions:
+
+1. `MODEL_SESSION = "whisper"` — smoke test, train, evaluate, publish Whisper.
+2. `MODEL_SESSION = "wav2vec2_bert"` — smoke test, train, evaluate, publish
+   Wav2Vec2-BERT.
+3. `MODEL_SESSION = "comparison"` — builds the paired report from the results
+   already pushed to GitHub in steps 1–2 (no GPU training).
+
+Publishing cells tolerate partial runs: they upload only the models and result
+files that exist, and the comparison report is generated only when both runs are
+available.
 
 The Wav2Vec2-BERT Kaggle configuration is
 `config_files/ASR_train_config_wav2vec2_bert_kaggle.yaml`. The report gate is

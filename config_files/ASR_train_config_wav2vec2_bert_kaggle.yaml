@@ -48,7 +48,7 @@ test_ratio: 0.10
 min_audio_length: 2.0
 max_audio_length: 30.0
 max_train_hours: 40.0
-num_proc: 4
+num_proc: 2
 
 use_torch_compile: false
 torch_compile_mode: "reduce-overhead"
