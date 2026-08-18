@@ -143,6 +143,7 @@ def create_asr_model(config: ASRConfig,
     if "hubert" in pretrained_model_path.lower():
         model = AutoModelForCTC.from_pretrained(
             pretrained_model_path,
+            cache_dir=getattr(config, "cache_dir", None),
             attention_dropout=0.00,
             hidden_dropout=0.00,
             feat_proj_dropout=0.00,
@@ -156,6 +157,7 @@ def create_asr_model(config: ASRConfig,
     else:
         model = AutoModelForCTC.from_pretrained(
             pretrained_model_path,
+            cache_dir=getattr(config, "cache_dir", None),
             attention_dropout=0.00,
             hidden_dropout=0.00,
             feat_proj_dropout=0.00,
@@ -169,9 +171,17 @@ def create_asr_model(config: ASRConfig,
         )
 
     # apply freezing configuration
-    # if model is based on wav2vec2, freeze feature encoder if specified
-    if hasattr(model, 'freeze_feature_encoder') and config.freeze_feature_encoder:
+    # Wav2Vec2-BERT does not expose `freeze_feature_encoder`; freezing the base
+    # model would freeze the whole encoder (including the CTC head inputs), so we
+    # warn instead of silently ignoring the flag.
+    if config.freeze_feature_encoder and hasattr(model, 'freeze_feature_encoder'):
         model.freeze_feature_encoder()
+    elif config.freeze_feature_encoder:
+        logging.warning(
+            "freeze_feature_encoder=True is not supported for %s "
+            "(no freeze_feature_encoder method); feature encoder will NOT be frozen",
+            pretrained_model_path,
+        )
 
     # torch.compile for faster training (PyTorch 2.0+)
     if getattr(config, "use_torch_compile", False):
@@ -183,5 +193,4 @@ def create_asr_model(config: ASRConfig,
             logging.warning("torch.compile not available (requires PyTorch >= 2.0)")
 
     return model
-
 

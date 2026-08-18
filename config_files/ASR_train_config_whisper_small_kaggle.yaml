@@ -1,13 +1,21 @@
 # Kaggle T4 x2 configuration for multilingual Whisper Small on Luhya ASR.
+# Shared comparison protocol with the CTC/Wav2Vec2 pipeline:
+#   - same dataset (DDD-Kenya/Luhya-ASR-Data-subset-50h)
+#   - same deterministic speaker-disjoint 80/10/10 splits (seed 42)
+#   - same audio window: 2-30 seconds
+#   - train split capped at 40 hours
+#   - lr 1e-5, warmup 500 steps, weight decay 0.01, grad clip 1.0
+#   - fp16 on the T4 x2 accelerator (precision is per-hardware case)
 # The 40h dataset currently requires an HF_TOKEN with access permission.
 
 project: "Luhya-ASR-Whisper"
 output_dir: "/kaggle/working/luhya-asr-output/whisper-small-luhya"
 cache_dir: "/kaggle/temp/huggingface-cache"
+code_revision: null             # notebook replaces this with the checked-out Git SHA
 seed: 42
 
-dataset_path: "Digital-Divide-Data/Luhya-ASR-Data-subset-50h"
-dataset_revision: "main"
+dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+dataset_revision: "main"       # notebook pins this to the resolved dataset SHA
 audio_column: "audio"
 text_column: "transcript"
 speaker_column: "user_id"
@@ -18,7 +26,7 @@ sampling_rate: 16000
 validation_ratio: 0.10
 test_ratio: 0.10
 rebuild_splits_on_speaker_overlap: true
-min_audio_length: 0.20
+min_audio_length: 2.0
 max_audio_length: 30.0
 max_train_hours: 40.0
 lowercase: true
@@ -41,10 +49,10 @@ num_train_epochs: 5
 max_steps: -1
 learning_rate: 0.00001
 weight_decay: 0.01
-warmup_steps: 0.05                 # Fraction of total optimizer steps in Transformers 5.x
+warmup_steps: 500                 # absolute warmup steps (>=1 in Transformers 5.x)
 max_grad_norm: 1.0
 
-fp16: true
+fp16: true                        # T4 x2 hardware case
 bf16: false
 gradient_checkpointing: true
 optim: "adamw_torch_fused"

@@ -1,315 +1,343 @@
-#!/usr/bin/env python
-# scripts/train_model.py
+#!/usr/bin/env python3
+"""Train/evaluate the CTC model with the shared Luhya comparison protocol."""
 
+from __future__ import annotations
+
+import argparse
+import csv
+import importlib.metadata
+import json
+import logging
 import os
 import sys
 from pathlib import Path
-import argparse
-import json
-import logging
-import random
-import numpy as np
-import torch
-import wandb
-from huggingface_hub import login as hf_login
+from typing import Any
 
-# setup logging
-def setup_logging():
-    """Configure logging."""
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("WANDB_DISABLED", "true")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+import numpy as np
+from accelerate import PartialState
+from transformers import AutoModelForCTC, AutoProcessor, set_seed
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.data.dataset import build_vocabulary, create_processor, load_datasets
+from src.models.factory import create_asr_model
+from src.training.collator import DataCollatorCTCRawAudioWithPadding
+from src.training.metrics import decode_ctc_predictions
+from src.training.trainer import create_asr_trainer
+from src.utils.config import load_config
+
+LOGGER = logging.getLogger("luhya-ctc")
+
+
+def setup_logging(is_main_process: bool) -> None:
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler()]
+        level=logging.INFO if is_main_process else logging.WARNING,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
 
 
-# setup logging and environment variables
-setup_logging()
-
-# a function to load environment variables from .env file
-def load_env_file(env_path='.env'):
-    """Load environment variables from .env file"""
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    try:
-                        key, value = line.split('=', 1)
-                        os.environ[key] = value.strip("'").strip('"')
-                    except ValueError:
-                        # Skip lines that don't have the format KEY=VALUE
-                        continue
-        logging.info(f"Environment variables loaded from {env_path}.")
-        return True
-    else:
-        logging.warning(f"Warning: .env file not found at {env_path}. "
-              "Environment variables will not be loaded.")
-        return False
-
-# try to load from .env file in project root
-logging.info("Trying to load environment variables from .env file...")
-script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-project_root = script_dir.parent
-env_path = project_root / '.env'
-load_env_file(env_path)
-logging.info(f"Environment variables loaded from {env_path}.")
-
-# add project root to Python path
-sys.path.insert(0, str(project_root))
-logging.info(f"Project root added to Python path: {project_root}")
-
-# Local imports -- don't move these to the top 
-from src.utils.config import load_config
-from src.data.dataset import (
-    load_datasets, 
-    build_vocabulary, 
-    create_processor, 
-)
-
-from src.utils.cache import load_encoded_datasets, save_encoded_datasets
-from src.data.dataset_encoders import ASRDatasetEncoder
-from src.models.factory import create_asr_model
-from src.training.collator import DataCollatorCTCWithPadding
-from src.training.trainer import create_asr_trainer
-
-# load huggingface set_seed function from transformers
-from transformers import set_seed as huggingface_set_seed
+def load_env_file(env_path: Path) -> None:
+    """Load a simple local .env without overriding explicit environment values."""
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key, value.strip().strip("'").strip('"'))
 
 
-# setup environment variables for wandb and huggingface
-def setup_environment():
-    """Set up necessary environment variables."""
-    # Get API keys from environment (assumes they're already set)
-    wandb_key = os.environ.get("WANDB_API_KEY")
-    hf_key = os.environ.get("HF_TOKEN")
-    
-    if not wandb_key:
-        logging.warning("WANDB_API_KEY not found in environment variables")
-    if not hf_key:
-        logging.warning("HF_TOKEN not found in environment variables")
-
-# setup random seeds in numpy, torch, and huggingface for reproducibility
-def setup_seed(seed: int):
-    """Set up random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        # for reproducible operations on GPU
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Train ASR model')
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, help="Path to the YAML configuration")
     parser.add_argument(
-        '--config', 
-        type=str, 
-        required=True, 
-        help='Path to config YAML file'
+        "--resume_from_checkpoint",
+        default=None,
+        help="Checkpoint path, or 'latest' to use the newest checkpoint in the run directory",
+    )
+    parser.add_argument(
+        "--smoke_test",
+        action="store_true",
+        help="Run two optimizer steps on small deterministic subsets",
+    )
+    parser.add_argument(
+        "--evaluation_only",
+        action="store_true",
+        help="Reload the final model (or latest checkpoint) and regenerate artifacts",
     )
     return parser.parse_args()
 
 
-def main():
-    """
-    Main function to load the config, setup the environment, 
-    parse the arguments, load the configuration, train the model, save the model and processor, 
-    evaluate the model, and clean up the dataset cache.
-    """
-    # setup logging and environment variables
-    setup_logging()
-    setup_environment()
-    
-    # parse command line arguments
-    args = parse_args()
-    
-    # load ASR configuration from YAML file
-    logging.info(f"Loading configuration from {args.config}...")
-    config = load_config(args.config)
+def newest_checkpoint(output_dir: Path) -> str | None:
+    checkpoints: list[tuple[int, Path]] = []
+    for path in output_dir.glob("checkpoint-*"):
+        try:
+            step = int(path.name.rsplit("-", 1)[1])
+        except ValueError:
+            continue
+        checkpoints.append((step, path))
+    return str(max(checkpoints)[1]) if checkpoints else None
 
-    # setup random seed for reproducibility
-    setup_seed(config.seed)
-    huggingface_set_seed(config.seed)
 
-    # login to wandb
-    logging.info("Logging in to Weights & Biases...")
-    if os.environ.get("WANDB_API_KEY"):
-        wandb.login()
-        wandb.init(
-            project=config.project,
-            config={
-                'learning_rate': config.learning_rate,
-                'model': config.pretrained_model,
-                'batch_size': config.batch_size,
-                'epochs': config.num_epochs
+def runtime_versions() -> dict[str, str]:
+    packages = ("transformers", "datasets", "accelerate", "torch", "jiwer")
+    versions = {}
+    for package in packages:
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = "unknown"
+    return versions
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def write_predictions(
+    path: Path,
+    prediction_output: Any,
+    processor: Any,
+    test_dataset: Any,
+    speaker_column: str | None,
+) -> None:
+    expected_rows = len(test_dataset)
+    predictions, references = decode_ctc_predictions(
+        prediction_output,
+        processor,
+        expected_rows=expected_rows,
+    )
+    durations = [float(value) for value in test_dataset["audio_duration"]]
+    metadata_columns = [
+        name
+        for name in (speaker_column, "dialect", "language")
+        if name and name in test_dataset.column_names
+    ]
+
+    fieldnames = ["id", "reference", "prediction", "audio_duration", *metadata_columns]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for index, (reference, prediction) in enumerate(zip(references, predictions)):
+            row = {
+                "id": index,
+                "reference": reference,
+                "prediction": prediction,
+                "audio_duration": durations[index],
             }
+            for column in metadata_columns:
+                row[column] = test_dataset[column][index]
+            writer.writerow(row)
+
+
+def main() -> None:
+    args = parse_args()
+    if args.smoke_test and args.evaluation_only:
+        raise ValueError("--smoke_test and --evaluation_only cannot be used together")
+
+    state = PartialState()
+    setup_logging(state.is_main_process)
+    load_env_file(PROJECT_ROOT / ".env")
+    config = load_config(args.config)
+    set_seed(config.seed)
+
+    base_experiment_name = config.get_experiment_name()
+    experiment_name = (
+        f"{base_experiment_name}-smoke-test" if args.smoke_test else base_experiment_name
+    )
+    if args.smoke_test:
+        config.max_steps = 2
+        config.num_epochs = 1
+        config.eval_steps = 1
+        config.save_steps = 1
+        config.logging_steps = 1
+        config.report_to = "none"
+        config.persistent_workers = False
+        config.dataloader_num_workers = 0
+
+    run_dir = Path(config.output_dir) / experiment_name
+    final_model_dir = run_dir / "final-model"
+    processor_dir = run_dir / "processor"
+    ctc_dir = run_dir / "ctc_tokenizer"
+    if state.is_main_process:
+        run_dir.mkdir(parents=True, exist_ok=True)
+    state.wait_for_everyone()
+
+    splits, speaker_column, split_manifest = load_datasets(
+        config,
+        state=state,
+        smoke_test=args.smoke_test,
+    )
+    train_dataset = splits["train"]
+    validation_dataset = splits["validation"]
+    test_dataset = splits.get("test")
+    if test_dataset is None or len(test_dataset) == 0:
+        raise ValueError("The comparison protocol requires a non-empty held-out test split")
+
+    evaluation_model_source: str | None = None
+    if args.evaluation_only:
+        if final_model_dir.is_dir():
+            evaluation_model_source = str(final_model_dir)
+        else:
+            evaluation_model_source = newest_checkpoint(run_dir)
+        if evaluation_model_source is None:
+            raise FileNotFoundError(
+                f"No final model or checkpoint found under {run_dir}; "
+                "evaluation-only recovery is not possible"
+            )
+        processor_source = final_model_dir if final_model_dir.is_dir() else processor_dir
+        processor = AutoProcessor.from_pretrained(
+            processor_source,
+            cache_dir=config.cache_dir,
+            token=os.environ.get("HF_TOKEN"),
         )
+        model = AutoModelForCTC.from_pretrained(
+            evaluation_model_source,
+            cache_dir=config.cache_dir,
+            token=os.environ.get("HF_TOKEN"),
+        )
+        LOGGER.info("Evaluation-only mode: loading %s", evaluation_model_source)
     else:
-        logging.warning("WANDB_API_KEY not found in environment variables. "
-                        "Weights & Biases logging will be disabled.")
-    
-    # log in to huggingface
-    logging.info("Logging in to Hugging Face...")
-    if os.environ.get("HF_TOKEN"):
-        hf_login(token=os.environ["HF_TOKEN"])
-        logging.info("Successfully logged in to Hugging Face 🤗")
-    else:
-        logging.warning("HF_TOKEN not found in environment variables. "
-                        "Hugging Face login will be disabled 😔")
+        vocab_dict = build_vocabulary(
+            config.character_set,
+            config.add_language_tokens,
+            None,
+        )
+        if state.is_main_process:
+            ctc_dir.mkdir(parents=True, exist_ok=True)
+            with (ctc_dir / "vocab.json").open("w", encoding="utf-8") as handle:
+                json.dump(vocab_dict, handle, indent=2, ensure_ascii=False)
+        state.wait_for_everyone()
 
-    # create output directory 
-    output_dir = Path(config.output_dir)
-    output_dir.mkdir(exist_ok=True, parents=True)
+        processor = create_processor(config, str(ctc_dir))
+        if state.is_main_process:
+            processor.save_pretrained(processor_dir)
+        state.wait_for_everyone()
+        model = create_asr_model(config, processor)
 
-    # create experiment name and model directory to save the model and processor after training
-    experiment_name = config.get_experiment_name()
-    model_dir = os.path.join(output_dir, experiment_name)
-    os.makedirs(model_dir, exist_ok=True)
-    
-    # load datasets from the HF hub or local dataset
-    logging.info(f"Loading training and evaluation datasets from {config.dataset_path}...")
-    train_dataset, eval_dataset = load_datasets(config)
-    logging.info(f"Loaded {len(train_dataset)} training samples "
-                 f"and {len(eval_dataset)} validation samples")
-
-    # compute the size of the training data as hours
-    total_num_of_sec = sum([float(x) for x in train_dataset['audio_duration']])
-    num_of_hours = total_num_of_sec/(60*60)
-    logging.info(f"Total number of hours: {num_of_hours:.3f}!")
-
-    # build vocabulary from  user provided character set
-    logging.info("Building vocabulary...")
-    
-    lang_col = None
-    if 'language' in train_dataset.column_names:
-        lang_col = 'language'
-    elif 'dialect' in train_dataset.column_names:
-        lang_col = 'dialect'
-
-    if lang_col:
-        language_tags = set(train_dataset[lang_col])
-        logging.info(f"Language tags ({lang_col}): {language_tags}")
-    else:
-        logging.warning("Language/dialect tags not found in the training dataset. "
-                        "Multilingual training with language tags will not be used.")
-        language_tags = None
-        logging.info(f"Language tags: {language_tags}")
-
-    vocab_dict = build_vocabulary(
-        config.character_set,
-        config.add_language_tokens,
-        language_tags
+    collator = DataCollatorCTCRawAudioWithPadding(
+        processor=processor,
+        audio_column=config.audio_column,
+        text_column="clean_transcription",
+        sampling_rate=config.sampling_rate,
     )
-
-    logging.info(f"Size of vocabulary created: {len(vocab_dict)}.")
-    logging.info(f"Items of the vocabulary: {vocab_dict}...")
-
-    # save vocabulary to dedicated CTC tokenizer directory
-    ctc_dir = os.path.join(model_dir, "ctc_tokenizer")
-    os.makedirs(ctc_dir, exist_ok=True)
-
-    with open(os.path.join(ctc_dir, "vocab.json"), "w") as f:
-        json.dump(vocab_dict, f, indent=4)
-
-    logging.info(f"Vocabulary saved to {ctc_dir}/vocab.json")
-
-    
-    # create processor and save it to disk
-    logging.info("Creating processor...")
-    processor = create_processor(config, ctc_dir)
-
-    logging.info(f"Saving processor to {model_dir}/processor/")
-    processor.save_pretrained(os.path.join(model_dir, "processor"))
-    logging.info(f"Type of the processor: {type(processor)}")   
-
-    # create model
-    logging.info(f"Creating model from the pretraiend {config.pretrained_model} model...")
-    model = create_asr_model(config, processor)
-    
-    # encode datasets for training with ASRDatasetEncoder
-    logging.info("Preparing datasets for training with ASRDatasetEncoder...")
-    asr_dataset_encoder = ASRDatasetEncoder(processor)
-    num_proc = getattr(config, 'num_proc', 4)
-    train_dataset = asr_dataset_encoder.encode_dataset(train_dataset, num_proc=num_proc)
-    eval_dataset = asr_dataset_encoder.encode_dataset(eval_dataset, num_proc=num_proc)
-
-    # # encode datasets (with caching)
-    # cache_dir = project_root / ".dataset_cache"
-    # cached_train, cached_eval = load_encoded_datasets(config, cache_dir)
-    
-    # if cached_train is not None:
-    #     train_dataset, eval_dataset = cached_train, cached_eval
-    # else:
-    #     logging.info("Preparing datasets for training with ASRDatasetEncoder...")
-    #     asr_dataset_encoder = ASRDatasetEncoder(processor)
-    #     train_dataset = asr_dataset_encoder.encode_dataset(train_dataset)
-    #     eval_dataset = asr_dataset_encoder.encode_dataset(eval_dataset)
-    #     save_encoded_datasets(train_dataset, eval_dataset, config, cache_dir)
-
-    # show a tokenized sample of the train dataset and deocde text
-    logging.info(f"first sample of the train dataset: {train_dataset[0]['labels']}")
-    logging.info(f"first sample of the decoded text: {processor.decode(train_dataset[0]['labels'])}")
-
-    # create data collator
-    data_collator = DataCollatorCTCWithPadding(
-        processor=processor, 
-        padding=True
-    )
-
-
-    # create and run trainer
-    logging.info("Creating a Trainer object...")
     trainer = create_asr_trainer(
         model=model,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=data_collator,
+        eval_dataset=validation_dataset,
+        data_collator=collator,
         processor=processor,
-        experiment_name=experiment_name, 
-        config=config
+        experiment_name=experiment_name,
+        config=config,
     )
-    
-    logging.info("Starting training model for ASR...")
-    trainer.train()
-    
-    # save model and processor
-    logging.info("Saving model and processor...")
-    trainer.save_model(str(model_dir))
-    processor.save_pretrained(str(model_dir))
 
-    logging.info(f"Training completed. Model saved to {model_dir}")
+    resume = args.resume_from_checkpoint
+    if resume == "latest":
+        resume = newest_checkpoint(run_dir)
+        if resume is None:
+            LOGGER.info("No checkpoint found in %s; starting from the base model", run_dir)
 
+    world_size = max(1, state.num_processes)
+    global_batch = (
+        trainer.args.per_device_train_batch_size
+        * trainer.args.gradient_accumulation_steps
+        * world_size
+    )
+    if state.is_main_process:
+        LOGGER.info("Devices/processes: %d; optimizer global batch: %d", world_size, global_batch)
+        LOGGER.info("Split manifest: %s", json.dumps(split_manifest, indent=2))
 
-    # push model to Hugging Face Hub as a private model
-    # if os.environ.get("HF_TOKEN"):
-    #     model.push_to_hub(
-    #         repo_id=f"badrex/{experiment_name}",
-    #         use_auth_token=os.environ["HF_TOKEN"],
-    #         private=True
-    #     )
-    #     logging.info(f"Pushed model to Hugging Face Hub: badrex/{experiment_name}")
-    
-    # final evaluation
-    logging.info("Evaluating model...")
-    metrics = trainer.evaluate()
-    logging.info(f"Final evaluation metrics: {metrics}")
-    
-    # save metrics to file in JSON format to disk
-    with open(os.path.join(model_dir, "metrics.json"), "w") as f:
-        json.dump(metrics, f)
-    
-    logging.info(f"Model evaluation completed. Metrics saved to {model_dir}/metrics.json")
+    if args.evaluation_only:
+        train_metrics: dict[str, Any] = {}
+        train_results_path = run_dir / "train_results.json"
+        if train_results_path.is_file():
+            train_metrics = json.loads(train_results_path.read_text(encoding="utf-8"))
+    else:
+        train_result = trainer.train(resume_from_checkpoint=resume)
+        train_metrics = train_result.metrics
+        trainer.log_metrics("train", train_metrics)
+        trainer.save_metrics("train", train_metrics)
+        trainer.save_model(str(final_model_dir))
+        if state.is_main_process:
+            processor.save_pretrained(final_model_dir)
+    state.wait_for_everyone()
 
-    # clean up dataset cache
-    logging.info("Cleaning up dataset cache files...")
-    train_dataset.cleanup_cache_files()
-    eval_dataset.cleanup_cache_files() 
+    trainer.asr_metrics.set_expected_rows(len(validation_dataset))
+    validation_metrics = trainer.evaluate(
+        eval_dataset=validation_dataset,
+        metric_key_prefix="validation",
+    )
+    trainer.log_metrics("validation", validation_metrics)
+    trainer.save_metrics("validation", validation_metrics)
 
-    logging.info("Training & evaluation completed successfully!")
+    trainer.asr_metrics.set_expected_rows(len(test_dataset))
+    test_output = trainer.predict(test_dataset, metric_key_prefix="test")
+    trainer.log_metrics("test", test_output.metrics)
+    trainer.save_metrics("test", test_output.metrics)
+
+    if state.is_main_process:
+        write_predictions(
+            run_dir / "test_predictions.csv",
+            test_output,
+            processor,
+            test_dataset,
+            speaker_column,
+        )
+        summary = {
+            "model_name": config.get_pretrained_model_path(),
+            "architecture": "ctc",
+            "code_revision": config.code_revision,
+            "world_size": world_size,
+            "optimizer_global_batch_size": global_batch,
+            "split_manifest": split_manifest,
+            "config": vars(config),
+            "runtime_versions": runtime_versions(),
+            "train_metrics": train_metrics,
+            "validation_metrics": validation_metrics,
+            "test_metrics": test_output.metrics,
+        }
+        with (run_dir / "evaluation_summary.json").open("w", encoding="utf-8") as handle:
+            json.dump(json_safe(summary), handle, ensure_ascii=False, indent=2)
+
+        rows = []
+        for split_name, metrics in (
+            ("validation", validation_metrics),
+            ("test", test_output.metrics),
+        ):
+            rows.append(
+                {
+                    "split": split_name,
+                    "wer_percent": 100 * float(metrics[f"{split_name}_wer"]),
+                    "cer_percent": 100 * float(metrics[f"{split_name}_cer"]),
+                    "loss": metrics.get(f"{split_name}_loss", ""),
+                }
+            )
+        with (run_dir / "metrics_summary.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["split", "wer_percent", "cer_percent", "loss"],
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        LOGGER.info("Evaluation artifacts saved to %s", run_dir)
 
 
 if __name__ == "__main__":

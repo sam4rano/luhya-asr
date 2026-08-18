@@ -4,6 +4,8 @@ from typing import Dict, List, Union
 import torch
 from transformers import Wav2Vec2Processor, Wav2Vec2BertProcessor
 
+from src.data.splits import _audio_samples
+
 ASRProcessor = Union[Wav2Vec2Processor, Wav2Vec2BertProcessor]
 
 class DataCollatorCTCWithPadding:
@@ -52,6 +54,56 @@ class DataCollatorCTCWithPadding:
             labels_batch.attention_mask.ne(1), -100
         )
 
+        return batch
+
+
+class DataCollatorCTCRawAudioWithPadding:
+    """Compute CTC audio features per batch instead of caching the full 40h set.
+
+    Keeping raw audio in the Dataset avoids materializing several gigabytes of
+    mel/input features in Arrow before training. The feature extractor and
+    tokenizer are still padded independently, as required for CTC.
+    """
+
+    def __init__(
+        self,
+        processor: ASRProcessor,
+        audio_column: str = "audio",
+        text_column: str = "clean_transcription",
+        sampling_rate: int = 16_000,
+    ):
+        self.processor = processor
+        self.audio_column = audio_column
+        self.text_column = text_column
+        self.sampling_rate = sampling_rate
+
+    def __call__(self, features: List[Dict]) -> Dict[str, torch.Tensor]:
+        arrays = []
+        texts = []
+        for feature in features:
+            array, sample_rate = _audio_samples(feature[self.audio_column])
+            if sample_rate != self.sampling_rate:
+                raise ValueError(
+                    f"Expected {self.sampling_rate} Hz after dataset casting, "
+                    f"got {sample_rate} Hz"
+                )
+            arrays.append(array)
+            texts.append(feature[self.text_column])
+
+        batch = self.processor(
+            audio=arrays,
+            sampling_rate=self.sampling_rate,
+            padding=True,
+            return_tensors="pt",
+        )
+        labels_batch = self.processor.tokenizer(
+            texts,
+            padding=True,
+            return_tensors="pt",
+        )
+        batch["labels"] = labels_batch["input_ids"].masked_fill(
+            labels_batch["attention_mask"].ne(1), -100
+        )
         return batch
 
 

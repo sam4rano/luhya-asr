@@ -1,5 +1,13 @@
 # Luhya ASR -- Colab: w2v-bert-2.0 following HF blog recommendations
 # run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya_colab.yaml
+#
+# Shared comparison protocol with the Whisper pipeline:
+#   - same dataset (DDD-Kenya/Luhya-ASR-Data-subset-50h)
+#   - same deterministic speaker-disjoint 80/10/10 splits (seed 42)
+#   - same audio window: 2-30 seconds
+#   - train split capped at 40 hours
+#   - lr 1e-5, warmup 500 steps, weight decay 0.01, grad clip 1.0
+#   - fp16 on the T4 accelerator (precision is per-hardware case)
 
 project: "Luhya-ASR"
 output_dir: "/content/drive/MyDrive/luhya-asr-output"
@@ -16,8 +24,10 @@ batch_size: 4                           # lower for T4; effective batch = 4 * 8 
 gradient_accumulation_steps: 8
 num_epochs: 5
 max_steps: -1
-learning_rate: 0.00005                  # 5e-5
+learning_rate: 0.00001                  # 1e-5 (aligned with Whisper pipeline)
 warmup_steps: 500
+weight_decay: 0.01
+max_grad_norm: 1.0
 fp16: true                              # T4 sweet spot
 bf16: false
 gradient_checkpointing: true
@@ -30,14 +40,20 @@ ctc_zero_infinity: true
 # Data
 use_custom_dataset: false
 dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+dataset_revision: "main"
 train_split: "train"
 eval_split: "validation"
+speaker_column: "user_id"
+rebuild_splits_on_speaker_overlap: true
 
-# 40 hours, 80/20 split
-max_data_hours: 40.0
-validation_split_pct: 0.2
+# 40 hours, deterministic speaker-disjoint 80/10/10 train/val/test split
+# (fall back to 80/20 by setting `validation_ratio: 0.20` and `test_ratio: 0.0`)
+validation_ratio: 0.10
+test_ratio: 0.10
+max_train_hours: 40.0
 
 # Memory safety on T4 Colab
+min_audio_length: 2.0
 max_audio_length: 30.0
 num_proc: 2
 
@@ -55,4 +71,8 @@ sample_size: 1000
 add_language_tokens: false
 apply_accent_replacements: false
 
-character_set: " !'*,-.0123456789;:?abcdefghijklmnopqrstuvwxyz"
+# Canonical character set shared with the Whisper pipeline (see
+# src/data/splits.py CANONICAL_CHARS): letters, digits, space, apostrophe.
+# All other punctuation and diacritics are normalized/dropped consistently in
+# BOTH pipelines so WER/CER references are identical.
+character_set: " '0123456789abcdefghijklmnopqrstuvwxyz"

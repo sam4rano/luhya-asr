@@ -1,0 +1,65 @@
+# Kaggle T4 x2 configuration for the CTC comparison model.
+# Despite the short label "wav2vec" in the notebook, the exact model is
+# facebook/w2v-bert-2.0 (Wav2Vec2-BERT 2.0), matching this repository's model.
+
+project: "Luhya-ASR-Comparison"
+output_dir: "/kaggle/working/luhya-asr-output"
+experiment_name: "wav2vec2-bert-luhya"
+code_revision: null             # notebook replaces this with the checked-out Git SHA
+cache_dir: "/kaggle/temp/huggingface-cache"
+seed: 42
+report_to: "none"
+
+pretrained_model: "facebook/w2v-bert-2.0"
+freeze_feature_encoder: false   # unsupported by Wav2Vec2-BERT; train the encoder
+add_final_layer_adapter: true
+ctc_zero_infinity: true
+
+# 2 samples x 2 GPUs x 8 accumulation = global optimizer batch 32.
+batch_size: 2
+gradient_accumulation_steps: 8
+num_epochs: 5
+max_steps: -1
+learning_rate: 0.00001
+warmup_steps: 500
+warmup_ratio: 0.0
+weight_decay: 0.01
+max_grad_norm: 1.0
+fp16: true
+bf16: false
+gradient_checkpointing: true
+save_steps: 500
+eval_steps: 500
+logging_steps: 20
+save_total_limit: 1
+
+use_custom_dataset: false
+dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+dataset_revision: "main"       # notebook pins this to the resolved dataset SHA
+train_split: "train"
+eval_split: "validation"
+audio_column: "audio"
+text_column: "transcript"
+speaker_column: "user_id"
+sampling_rate: 16000
+rebuild_splits_on_speaker_overlap: true
+validation_ratio: 0.10
+test_ratio: 0.10
+min_audio_length: 2.0
+max_audio_length: 30.0
+max_train_hours: 40.0
+num_proc: 4
+
+use_torch_compile: false
+torch_compile_mode: "reduce-overhead"
+group_by_length: true
+use_fused_optimizer: true
+persistent_workers: true
+dataloader_num_workers: 2
+
+sample: false
+sample_size: 1000
+language: "all"
+add_language_tokens: false
+apply_accent_replacements: false
+character_set: " '0123456789abcdefghijklmnopqrstuvwxyz"

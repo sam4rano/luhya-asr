@@ -3,7 +3,6 @@ import os
 from typing import Dict, Any, Optional
 import torch
 from transformers import Trainer, TrainingArguments, Wav2Vec2Processor
-import evaluate
 
 from src.utils.config import ASRConfig
 from src.training.metrics import ASRMetrics, preprocess_logits_for_metrics
@@ -26,9 +25,11 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
     
     # Configure warmup based on steps or ratio
     if hasattr(config, 'warmup_steps') and config.warmup_steps > 0:
-        # Step-based warmup
+        # Step-based warmup. warmup_ratio must stay None: TrainingArguments in
+        # Transformers 5.x overrides warmup_steps with warmup_ratio whenever it
+        # is not None (even when set to 0.0).
         warmup_steps = config.warmup_steps
-        warmup_ratio = 0.0
+        warmup_ratio = None
     else:
         # Ratio-based warmup (existing approach)
         warmup_steps = 0
@@ -39,7 +40,7 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        dataloader_num_workers=4,
+        dataloader_num_workers=getattr(config, "dataloader_num_workers", 2),
         dataloader_pin_memory=True,
         dataloader_persistent_workers=getattr(config, "persistent_workers", True),
         fp16=config.fp16,
@@ -54,6 +55,8 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         adam_epsilon=1e-08,
         warmup_steps=warmup_steps,
         warmup_ratio=warmup_ratio,
+        weight_decay=getattr(config, "weight_decay", 0.0),
+        max_grad_norm=getattr(config, "max_grad_norm", 1.0),
         save_steps=config.save_steps,
         eval_steps=config.eval_steps,
         save_strategy="best",
@@ -66,7 +69,8 @@ def create_training_args(config: ASRConfig, experiment_name: str) -> TrainingArg
         metric_for_best_model="score",
         greater_is_better=True,
         train_sampling_strategy="group_by_length" if getattr(config, "group_by_length", True) else "random",
-        length_column_name="length",
+        length_column_name="audio_duration",
+        remove_unused_columns=False,
     )  
 
 
@@ -106,8 +110,6 @@ def create_asr_trainer(
     # create ASR metrics
     asr_metrics = ASRMetrics(
         processor=processor,
-        wer_metric=evaluate.load("wer"),
-        cer_metric=evaluate.load("cer"),
         output_dir= os.path.join(training_args.output_dir, "predictions_json")
     )
 
@@ -120,6 +122,8 @@ def create_asr_trainer(
         processing_class=processor.feature_extractor,
         data_collator=data_collator,
         compute_metrics=asr_metrics.compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
+    trainer.asr_metrics = asr_metrics
     
     return trainer

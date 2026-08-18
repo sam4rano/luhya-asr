@@ -29,6 +29,11 @@ model-index:
 
 Fine-tuned Facebook Wav2Vec2-BERT 2.0 (580M parameters) for Automatic Speech Recognition in Luhya, a Bantu language spoken in Kenya.
 
+> **Historical result:** the metrics below describe the earlier 20-hour,
+> validation-only Wav2Vec2-BERT run. They must not be compared with the aligned
+> 40-hour Whisper result. Use the comparison notebook below to generate the new
+> matched validation/test report.
+
 Model on HuggingFace Hub: [Sam4rano/luhya-asr-w2v-BERT](https://huggingface.co/Sam4rano/luhya-asr-w2v-BERT)
 
 ## Dataset
@@ -105,7 +110,7 @@ Model on HuggingFace Hub: [Sam4rano/luhya-asr-w2v-BERT](https://huggingface.co/S
 
 The repository also contains a separate Kaggle-native sequence-to-sequence
 pipeline for fine-tuning `openai/whisper-small` on
-`Digital-Divide-Data/Luhya-ASR-Data-subset-50h`, with the training split
+`DDD-Kenya/Luhya-ASR-Data-subset-50h`, with the training split
 deterministically limited to at most 40 hours:
 
 During the duration pass, every clip is decoded once on CPU. Corrupt or empty
@@ -117,6 +122,27 @@ split manifest, preventing a bad file from wasting a multi-hour GPU run.
 - Configuration: `config_files/ASR_train_config_whisper_small_kaggle.yaml`
 - Model card: `model_cards/whisper-small-luhya/README.md`
 - Kaggle dependencies: `requirements-kaggle.txt`
+
+## One-notebook aligned comparison and publishing
+
+Use `luhya-asr-whisper-small.ipynb` for the current Kaggle experiment. Despite
+its legacy filename, it now orchestrates **both** `openai/whisper-small` and
+`facebook/w2v-bert-2.0` sequentially on T4 x2. It:
+
+- resolves `DDD-Kenya/Luhya-ASR-Data-subset-50h` once and pins its immutable SHA;
+- runs a two-step smoke test for each model before full training;
+- resumes each model independently from its latest checkpoint;
+- uses the same shared split/filter/text policy for both models;
+- regenerates exact held-out prediction artifacts without retraining;
+- refuses to generate a comparison when manifests or paired references differ;
+- builds model cards and a shareable Markdown/CSV comparison report;
+- optionally uploads both final models to private Hugging Face repositories;
+- optionally commits bounded aggregate results to GitHub, excluding weights and
+  speaker-level predictions by default.
+
+The Wav2Vec2-BERT Kaggle configuration is
+`config_files/ASR_train_config_wav2vec2_bert_kaggle.yaml`. The report gate is
+implemented in `scripts/build_comparison_report.py`.
 
 The Whisper path is intentionally separate from the CTC trainer. It computes
 log-Mel features in the data loader instead of storing a large encoded dataset,

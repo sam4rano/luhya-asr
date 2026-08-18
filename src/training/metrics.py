@@ -4,11 +4,12 @@ import numpy as np
 import torch
 import os
 import json
-import evaluate
+import jiwer
 from transformers import Wav2Vec2Processor, Wav2Vec2BertProcessor
 from transformers.trainer_utils import PredictionOutput
 
 from src.data.dataset import ASRProcessor
+from src.data.splits import canonical_text
 
 import logging
 
@@ -111,23 +112,24 @@ def preprocess_logits_for_metrics(logits: torch.Tensor,
 class ASRMetrics:
     def __init__(self,
                  processor: ASRProcessor,
-                 wer_metric: evaluate.Metric,
-                 cer_metric: evaluate.Metric,
                  output_dir: str = None):
         self.processor = processor
-        self.wer_metric = wer_metric
-        self.cer_metric = cer_metric
         self.output_dir = output_dir
         self._call_count = 0
+        self.expected_rows = None
+
+    def set_expected_rows(self, expected_rows: int) -> None:
+        self.expected_rows = expected_rows
 
     def compute_metrics(self, pred: PredictionOutput) -> Dict[str, float]:
         k = self._call_count
         self._call_count += 1
 
-        pred_ids = np.argmax(pred.predictions, axis=-1)
-        pred.label_ids[pred.label_ids == -100] = self.processor.tokenizer.pad_token_id
-        pred_str = self.processor.batch_decode(pred_ids)
-        label_str = self.processor.batch_decode(pred.label_ids, group_tokens=False)
+        pred_str, label_str = decode_ctc_predictions(
+            pred,
+            self.processor,
+            expected_rows=self.expected_rows,
+        )
 
         if self.output_dir is not None:
             # creare output directory if it does not exist
@@ -142,8 +144,8 @@ class ASRMetrics:
                 json.dump(predictions_and_references, f, ensure_ascii=False, indent=4)
             logging.info(f"predictions and references saved to {json_path}")
 
-        wer = self.wer_metric.compute(predictions=pred_str, references=label_str)
-        cer = self.cer_metric.compute(predictions=pred_str, references=label_str)
+        wer = float(jiwer.wer(label_str, pred_str))
+        cer = float(jiwer.cer(label_str, pred_str))
 
         for i in range(min(10, len(pred_str))):
             sample_wer = _simple_wer(pred_str[i], label_str[i])
@@ -159,6 +161,45 @@ class ASRMetrics:
         score = (1 - combined_error) * 100
 
         return {"wer": wer, "cer": cer, "score": score}
+
+
+def decode_ctc_predictions(
+    prediction_output: PredictionOutput,
+    processor: ASRProcessor,
+    expected_rows: int | None = None,
+) -> tuple[list[str], list[str]]:
+    """Decode CTC token IDs/logits and trim any distributed padding rows."""
+    predictions = prediction_output.predictions
+    if isinstance(predictions, tuple):
+        predictions = predictions[0]
+    pred_ids = np.asarray(predictions)
+    if pred_ids.ndim >= 3:
+        pred_ids = np.argmax(pred_ids, axis=-1)
+    elif pred_ids.ndim != 2:
+        raise ValueError(f"Expected rank-2 token IDs or rank-3 logits, got {pred_ids.shape}")
+
+    label_ids = np.array(prediction_output.label_ids, copy=True)
+    if expected_rows is not None:
+        if len(pred_ids) < expected_rows or len(label_ids) < expected_rows:
+            raise ValueError(
+                "Gathered CTC tensors are shorter than the expected split: "
+                f"predictions={len(pred_ids)}, labels={len(label_ids)}, "
+                f"expected={expected_rows}"
+            )
+        pred_ids = pred_ids[:expected_rows]
+        label_ids = label_ids[:expected_rows]
+
+    pad_id = processor.tokenizer.pad_token_id
+    pred_ids = np.array(pred_ids, copy=True)
+    pred_ids[pred_ids == -100] = pad_id
+    label_ids[label_ids == -100] = pad_id
+
+    predictions_text = processor.batch_decode(pred_ids)
+    references_text = processor.batch_decode(label_ids, group_tokens=False)
+    return (
+        [canonical_text(text) for text in predictions_text],
+        [canonical_text(text) for text in references_text],
+    )
 
 
 # NOTE: this code was added to be used as WER/CER metrics on individual samples 

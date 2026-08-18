@@ -2,11 +2,19 @@
 # follows the official HF blog: https://huggingface.co/blog/fine-tune-w2v2-bert
 #
 # run: python3 scripts/train_model.py --config config_files/ASR_train_config_luhya.yaml
+#
+# Shared comparison protocol with the Whisper pipeline:
+#   - same dataset (DDD-Kenya/Luhya-ASR-Data-subset-50h)
+#   - same deterministic speaker-disjoint 80/10/10 splits (seed 42)
+#   - same audio window: 2-30 seconds
+#   - train split capped at 40 hours
+#   - lr 1e-5, warmup 500 steps, weight decay 0.01, grad clip 1.0
+#   - bf16 (this hardware case supports bf16)
 
 project: "Luhya-ASR"
 output_dir: "inprogress/Luhya-ASR"
 seed: 42
-report_to: "wandb"
+report_to: "none"
 
 # Model -- Wav2Vec2-BERT 2.0 (580M params), best for low-resource ASR
 pretrained_model: "facebook/w2v-bert-2.0"
@@ -16,12 +24,14 @@ add_final_layer_adapter: true
 # Training
 batch_size: 4                 # effective batch = 4 * 8 = 32
 gradient_accumulation_steps: 8
-num_epochs: 5                 # train more epochs (was 25 with early stop at 2)
+num_epochs: 5
 max_steps: -1                 # -1 to use epochs instead of step-based training
-learning_rate: 0.00005        # 5e-5
-warmup_ratio: 0.1             # 10 % warmup
+learning_rate: 0.00001        # 1e-5 (aligned with Whisper pipeline)
+warmup_steps: 500             # absolute warmup steps (aligned with Whisper pipeline)
+weight_decay: 0.01
+max_grad_norm: 1.0
 fp16: false
-bf16: true                    # bf16 preferred over fp16 for training stability
+bf16: true                    # bf16 preferred over fp16 for training stability on this GPU
 gradient_checkpointing: true
 save_steps: 800
 eval_steps: 800
@@ -31,14 +41,23 @@ save_total_limit: 2
 # Data -- Luhya ASR subset from HuggingFace Hub
 use_custom_dataset: false
 dataset_path: "DDD-Kenya/Luhya-ASR-Data-subset-50h"
+dataset_revision: "main"
 train_split: "train"
 eval_split: "validation"
+speaker_column: "user_id"
+rebuild_splits_on_speaker_overlap: true
 
-# Use 40 hours, split into 80% train / 20% validation
-max_data_hours: 40.0
-validation_split_pct: 0.2     # 20% of data for validation (overrides eval_split)
+# Use 40 hours; deterministic speaker-disjoint 80/10/10 train/val/test split.
+# To fall back to an 80/20 train/validation layout for this pipeline instead,
+# set `validation_ratio: 0.20` and `test_ratio: 0.0` (test evaluation is then
+# skipped). Note this makes numbers from this pipeline non-comparable to the
+# 80/10/10 runs.
+validation_ratio: 0.10
+test_ratio: 0.10
+max_train_hours: 40.0
 
 # Memory safety -- prevent RAM ballooning at 40h
+min_audio_length: 2.0         # aligned audio window with the Whisper pipeline
 max_audio_length: 30.0        # drop samples >30s (memory spikes from very long audio)
 num_proc: 4                   # CPU processes for dataset preprocessing (lower = less RAM)
 
@@ -56,5 +75,8 @@ sample_size: 1000
 add_language_tokens: false
 apply_accent_replacements: false
 
-# Latin character set for Luhya (lowercase a-z, digits, basic punctuation)
-character_set: " !'*,-.0123456789;:?abcdefghijklmnopqrstuvwxyz"
+# Canonical character set shared with the Whisper pipeline (see
+# src/data/splits.py CANONICAL_CHARS): letters, digits, space, apostrophe.
+# All other punctuation and diacritics are normalized/dropped consistently in
+# BOTH pipelines so WER/CER references are identical.
+character_set: " '0123456789abcdefghijklmnopqrstuvwxyz"

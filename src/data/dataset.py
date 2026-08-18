@@ -1,11 +1,10 @@
 # src/data/dataset.py
 import json
 import logging
+import os
+from dataclasses import asdict
 from typing import Dict, Tuple, List, Any, Optional
 from datasets import load_dataset, Dataset, Audio, DatasetDict
-
-from datasets import disable_caching
-disable_caching()
 
 # for vectorized filtering on large datasets via Arrow
 # NOTE: this did not work for some reason; investigate later
@@ -26,7 +25,7 @@ from src.data.preprocessing import (
     clean_text_batch, 
     prepare_dataset_batch
 )
-
+from src.data.splits import prepare_splits
 from src.utils.config import ASRConfig
 
 # type alias for processor
@@ -133,6 +132,20 @@ def _get_dialect_column(dataset: Dataset) -> Optional[str]:
     return None
 
 
+def _make_dialect_filter(dialect_col: str, language: str):
+    """Build a module-level filter predicate that is safe to pickle."""
+    def _keep(x):
+        return str(x[dialect_col]).strip().lower() == language.strip().lower()
+    return _keep
+
+
+def _make_ctc_cleaner(allowed_chars: set[str]):
+    """Build a module-level map function that is safe to pickle."""
+    def _clean(text: str) -> dict[str, str]:
+        return {"clean_transcription": "".join(c for c in text if c in allowed_chars)}
+    return _clean
+
+
 def _filter_by_dialect(dataset: Dataset, dialect: str, dialect_col: str,
                        num_proc: int = 4) -> Dataset:
     """Filter dataset to only include a specific dialect."""
@@ -148,201 +161,93 @@ def _filter_by_dialect(dataset: Dataset, dialect: str, dialect_col: str,
     return dataset
 
 
-def load_datasets(config: ASRConfig) -> Tuple[Dataset, Dataset]:
-    """Load and prepare datasets for training and evaluation.
-    
-    Args:
-        config: Configuration object containing dataset parameters
-        
-    Returns:
-        Tuple of (train_dataset, eval_dataset)
+def load_datasets(
+    config: ASRConfig,
+    state: Any = None,
+    smoke_test: bool = False,
+) -> Tuple[DatasetDict, Optional[str], Dict[str, Any]]:
+    """Load and prepare the shared 80/10/10 speaker-disjoint train/validation/test splits.
+
+    Uses the same deterministic split, filtering, and 40-hour cap as the Whisper
+    pipeline (``src/data/splits.prepare_splits``) so different models train and
+    evaluate on identical clips. Returns ``(splits, speaker_column, manifest)``.
     """
     num_proc = getattr(config, 'num_proc', 4)
 
-    if hasattr(config, 'use_custom_dataset') and config.use_custom_dataset:
-        if hasattr(config, 'dataset_path') and config.dataset_path:
-            logging.info(f"Loading custom training dataset locally from "
-                         f"{config.dataset_path}...")
-            dataset = DatasetDict.load_from_disk(config.dataset_path)
-        else:
-            raise ValueError(f"dataset_path to a local dataset must be specified "
-                             f"when use_custom_dataset is True")
-    else:
-        logging.info(f"Loading dataset from HF hub from "
-                     f"{config.dataset_path}...")
-        dataset = load_dataset(
-            config.dataset_path,
-            verification_mode="no_checks",
-        )
+    config_dict = asdict(config)
+    config_dict.update({
+        'speaker_column': getattr(config, 'speaker_column', None) or 'user_id',
+        'validation_ratio': float(getattr(config, 'validation_ratio', 0.1)),
+        'test_ratio': float(getattr(config, 'test_ratio', 0.1)),
+        'rebuild_splits_on_speaker_overlap': bool(
+            getattr(config, 'rebuild_splits_on_speaker_overlap', True)
+        ),
+        'min_audio_length': float(getattr(config, 'min_audio_length', 0.0)),
+        'max_audio_length': float(getattr(config, 'max_audio_length', 30.0)),
+        'max_train_hours': float(getattr(config, 'max_train_hours', 0.0)),
+        'sampling_rate': int(getattr(config, 'sampling_rate', 16000)),
+        'lowercase': True,
+        'preprocessing_num_proc': num_proc,
+        'audio_column': getattr(config, 'audio_column', 'audio'),
+        'text_column': getattr(config, 'text_column', 'transcript'),
+        'dataset_revision': getattr(config, 'dataset_revision', 'main'),
+        'cache_dir': getattr(config, 'cache_dir', None),
+        'dataset_path': config.dataset_path,
+    })
 
-    logging.info(f"Casting audio column to Audio with 16000 Hz sampling rate...")
-    dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
+    prepared, manifest, _audio_col, normalized_col, speaker_column = prepare_splits(
+        config_dict,
+        state=state,
+        smoke_test=smoke_test,
+        token=os.environ.get('HF_TOKEN'),
+    )
 
-    train_dataset = dataset[config.train_split]
-
-    dialect_col = _get_dialect_column(train_dataset)
-    if dialect_col:
-        dialects = sorted(set(str(d) for d in train_dataset[dialect_col]))
-        logging.info(f"Detected dialect column '{dialect_col}' with values: {dialects}")
-    else:
-        logging.info("No dialect/language column found in dataset")
-
-    if config.language != "all" and dialect_col:
-        train_dataset = _filter_by_dialect(train_dataset, config.language,
-                                           dialect_col, num_proc)
-
-    train_dataset = _ensure_transcription_column(train_dataset, "train")
-    train_dataset = _ensure_audio_duration_column(train_dataset, "train")
-
-    validation_split_pct = getattr(config, 'validation_split_pct', 0.0)
-    if validation_split_pct > 0:
-        logging.info(f"Splitting train data: {1 - validation_split_pct:.0%} train, "
-                     f"{validation_split_pct:.0%} validation")
-        train_dataset = train_dataset.shuffle(seed=config.seed)
-        split_point = int(len(train_dataset) * (1 - validation_split_pct))
-        dev_dataset = train_dataset.select(range(split_point, len(train_dataset)))
-        train_dataset = train_dataset.select(range(split_point))
-        logging.info(f"Split: {len(train_dataset)} train samples, "
-                     f"{len(dev_dataset)} validation samples")
-    else:
-        logging.info(f"Using pre-existing eval split: '{config.eval_split}'")
-        dev_dataset = dataset[config.eval_split]
-        dev_dataset = _ensure_transcription_column(dev_dataset, "validation")
-        dev_dataset = _ensure_audio_duration_column(dev_dataset, "validation")
-
-    if config.sample:
-        logging.info(f"Sampling dataset to {config.sample_size} samples...")
-        train_dataset = train_dataset.shuffle(seed=config.seed)
-        train_dataset = train_dataset.select(range(config.sample_size))
-        dev_dataset = dev_dataset.shuffle(seed=config.seed)
-        dev_dataset = dev_dataset.select(range(min(2000, len(dev_dataset))))
-
-    if hasattr(config, 'max_data_hours') and config.max_data_hours > 0:
-        train_dataset = _filter_by_max_hours(
-            train_dataset, config.max_data_hours, config.seed
-        )
-
-    eval_dialect = getattr(config, 'eval_dialect', 'all')
-    if eval_dialect != "all" and dialect_col:
-        dev_dataset = _filter_by_dialect(dev_dataset, eval_dialect,
-                                         dialect_col, num_proc)
-        if len(dev_dataset) == 0:
-            logging.warning(
-                f"No samples found for eval dialect '{eval_dialect}'. "
-                f"Falling back to unfiltered eval set."
+    # Optional dialect filter (config.language defaults to "all" = no filter).
+    dialect_col = _get_dialect_column(prepared['train'])
+    language = getattr(config, 'language', 'all')
+    if language != 'all' and dialect_col:
+        logging.info(f"Filtering all splits to dialect '{language}'...")
+        keep_dialect = _make_dialect_filter(dialect_col, language)
+        for name in prepared:
+            prepared[name] = prepared[name].filter(
+                keep_dialect,
+                num_proc=num_proc,
             )
-            dev_dataset = dataset[config.eval_split if validation_split_pct == 0
-                                  else config.train_split]
-            if validation_split_pct == 0:
-                dev_dataset = _ensure_transcription_column(dev_dataset, "validation")
-                dev_dataset = _ensure_audio_duration_column(dev_dataset, "validation")
 
-    max_audio_length = getattr(config, 'max_audio_length', 0.0)
-    if max_audio_length > 0:
-        logging.info(f"Removing samples longer than {max_audio_length}s (memory safety)...")
-        n_before = len(train_dataset)
-        train_dataset = train_dataset.filter(
-            lambda x: x["audio_duration"] <= max_audio_length,
+    # CTC char-set cleaning: keep only characters in the user-provided character
+    # set so every target token exists in the CTC vocabulary. This mirrors the
+    # Whisper normalization except for characters outside the CTC character set.
+    allowed_chars = set(getattr(config, 'character_set', ''))
+    clean_ctc = _make_ctc_cleaner(allowed_chars)
+
+    for name, dataset in prepared.items():
+        dataset = dataset.map(
+            clean_ctc,
+            input_columns=[normalized_col],
+            output_columns=["clean_transcription"],
             num_proc=num_proc,
-            desc="Removing long samples in train split"
+            desc=f"Building CTC transcriptions for {name}",
         )
-        logging.info(f"Removed {n_before - len(train_dataset)} long samples from train split")
+        dataset = dataset.remove_columns([normalized_col])
+        prepared[name] = dataset
 
-        n_before = len(dev_dataset)
-        dev_dataset = dev_dataset.filter(
-            lambda x: x["audio_duration"] <= max_audio_length,
-            num_proc=num_proc,
-            desc="Removing long samples in validation split"
-        )
-        logging.info(f"Removed {n_before - len(dev_dataset)} long samples from validation split")
+    if getattr(config, 'sample', False):
+        size = getattr(config, 'sample_size', 1000)
+        logging.info(f"Sampling each split to at most {size} samples...")
+        for name in prepared:
+            prepared[name] = prepared[name].shuffle(seed=config.seed).select(
+                range(min(size, len(prepared[name])))
+            )
 
-    def _is_valid_audio(x):
-        try:
-            arr = x["audio"]["array"]
-            return arr is not None and len(arr) > 0
-        except Exception:
-            return False
-
-    n_before = len(train_dataset)
-    train_dataset = train_dataset.filter(_is_valid_audio, num_proc=num_proc,
-                                         desc="Removing corrupt audio from train split")
-    logging.info(f"Removed {n_before - len(train_dataset)} corrupt audio samples from train split")
-
-    n_before = len(dev_dataset)
-    dev_dataset = dev_dataset.filter(_is_valid_audio, num_proc=num_proc,
-                                     desc="Removing corrupt audio from validation split")
-    logging.info(f"Removed {n_before - len(dev_dataset)} corrupt audio samples from dev split")
-
-    if "audio_filepath" in train_dataset.column_names:
-        train_dataset = train_dataset.rename_column("audio_filepath", "audio")
-    elif "audio" in train_dataset.column_names:
-        pass
-    else:
-        raise ValueError(f"Audio filepath column was not found in train dataset,"
-                         f"which should be called 'audio_filepath' or 'audio'."
-                         f"Found columns: {train_dataset.column_names}.")
-
-    if "audio_filepath" in dev_dataset.column_names:
-        dev_dataset = dev_dataset.rename_column("audio_filepath", "audio")
-    elif "audio" in dev_dataset.column_names:
-        pass
-    else:
-        raise ValueError(f"Audio filepath column was not found in validation dataset,"
-                         f"which should be called 'audio_filepath' or 'audio'."
-                         f"Found columns: {dev_dataset.column_names}.")
-
-    logging.info(f"Removing unnecessary columns...")
-    features_to_keep = [
-        "audio", "transcription", "audio_duration",
-    ]
-    if dialect_col:
-        features_to_keep.append(dialect_col)
-
-    features_to_remove = [f for f in train_dataset.features if f not in features_to_keep]
-    train_dataset = train_dataset.remove_columns(features_to_remove)
-    dev_dataset = dev_dataset.remove_columns(features_to_remove)
-
-    logging.info(f"Preprocessing text transcripts...")
-    train_dataset = train_dataset.map(
-        lambda batch: clean_text_batch(batch, config.character_set, config.apply_accent_replacements),
-        batched=True,
-        batch_size=64,
-        num_proc=num_proc,
-        desc="Cleaning text transcripts in train split"
-    )
-    dev_dataset = dev_dataset.map(
-        lambda batch: clean_text_batch(batch, config.character_set, config.apply_accent_replacements),
-        batched=True,
-        batch_size=64,
-        num_proc=num_proc,
-        desc="Cleaning text transcripts in validation split"
-    )
-
-    if config.add_language_tokens and config.language == "all":
-        train_dataset = train_dataset.map(
-            lambda batch: add_language_tag_to_transcript(batch),
-            batched=True,
-            batch_size=16,
-            num_proc=num_proc,
-            desc="Adding language tags to train transcriptions"
+    for name, dataset in prepared.items():
+        durations = [float(d) for d in dataset['audio_duration']]
+        logging.info(
+            f"Final {name} split: {len(dataset)} samples ({sum(durations)/3600:.2f}h)"
         )
 
-        dev_dataset = dev_dataset.map(
-            lambda batch: add_language_tag_to_transcript(batch),
-            batched=True,
-            batch_size=16,
-            num_proc=num_proc,
-            desc="Adding language tags to validation transcriptions"
-        )
+    return prepared, speaker_column, manifest
 
-    total_train_secs = sum(float(d) for d in train_dataset["audio_duration"])
-    total_eval_secs = sum(float(d) for d in dev_dataset["audio_duration"])
-    logging.info(f"Final datasets: train={len(train_dataset)} samples "
-                 f"({total_train_secs/3600:.2f}h), "
-                 f"eval={len(dev_dataset)} samples "
-                 f"({total_eval_secs/3600:.2f}h)")
 
-    return train_dataset, dev_dataset
 
 
 def add_language_tag_to_transcript(batch: Dict[str, Any]) -> Dict[str, Any]:
@@ -419,7 +324,8 @@ def create_processor(
     pretrained_model_path = config.get_pretrained_model_path()
     if "w2v-bert" in pretrained_model_path.lower():
         feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(
-            pretrained_model_path
+            pretrained_model_path,
+            cache_dir=getattr(config, "cache_dir", None),
         )
         processor = Wav2Vec2BertProcessor(
             feature_extractor=feature_extractor, 

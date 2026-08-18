@@ -6,7 +6,7 @@ base_model_relation: finetune
 library_name: transformers
 pipeline_tag: automatic-speech-recognition
 datasets:
-- Digital-Divide-Data/Luhya-ASR-Data-subset-50h
+- DDD-Kenya/Luhya-ASR-Data-subset-50h
 metrics:
 - wer
 - cer
@@ -25,7 +25,7 @@ model-index:
       type: automatic-speech-recognition
     dataset:
       name: Luhya ASR 50h, deterministic speaker-disjoint test split (seed 42)
-      type: Digital-Divide-Data/Luhya-ASR-Data-subset-50h
+      type: DDD-Kenya/Luhya-ASR-Data-subset-50h
     metrics:
     - name: Test WER
       type: wer
@@ -40,7 +40,7 @@ model-index:
 This is a research baseline produced by fully fine-tuning
 [`openai/whisper-small`](https://huggingface.co/openai/whisper-small) for Luhya
 automatic speech recognition. It was trained on at most 40 hours selected from
-`Digital-Divide-Data/Luhya-ASR-Data-subset-50h` and evaluated on deterministic
+`DDD-Kenya/Luhya-ASR-Data-subset-50h` and evaluated on deterministic
 speaker-disjoint validation and test splits.
 
 **Status:** research and prototyping only. The model has not been validated for
@@ -132,8 +132,7 @@ training metrics, and package-generated results.
 ## Training data
 
 The configured dataset identifier was
-`Digital-Divide-Data/Luhya-ASR-Data-subset-50h`. The current public Hub listing
-may appear under `DDD-Kenya/Luhya-ASR-Data-subset-50h`. The dataset includes
+`DDD-Kenya/Luhya-ASR-Data-subset-50h`. The dataset includes
 audio, transcript, speaker (`user_id`), and dialect fields. The model card does
 not claim that every Luhya variety, age group, gender, geography, device, or
 acoustic environment is adequately represented.
